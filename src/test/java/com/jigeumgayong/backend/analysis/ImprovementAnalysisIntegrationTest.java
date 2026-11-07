@@ -1,0 +1,183 @@
+package com.jigeumgayong.backend.analysis;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+import com.jigeumgayong.backend.analysis.repository.AiAnalysisRepository;
+import com.jigeumgayong.backend.facility.domain.AccessType;
+import com.jigeumgayong.backend.facility.domain.ChipGroup;
+import com.jigeumgayong.backend.facility.domain.DayState;
+import com.jigeumgayong.backend.facility.domain.Facility;
+import com.jigeumgayong.backend.facility.domain.FacilitySpace;
+import com.jigeumgayong.backend.facility.domain.FacilityType;
+import com.jigeumgayong.backend.facility.domain.OperatingHour;
+import com.jigeumgayong.backend.facility.domain.SourceType;
+import com.jigeumgayong.backend.facility.domain.SpaceType;
+import com.jigeumgayong.backend.facility.repository.FacilityAmenityRepository;
+import com.jigeumgayong.backend.facility.repository.FacilityRepository;
+import com.jigeumgayong.backend.facility.repository.FacilitySpaceRepository;
+import com.jigeumgayong.backend.facility.repository.FacilityTypeRepository;
+import com.jigeumgayong.backend.facility.repository.OperatingHourRepository;
+import com.jigeumgayong.backend.support.FakeLlmClient;
+import com.jigeumgayong.backend.support.FakeLlmConfig;
+import java.math.BigDecimal;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.context.annotation.Import;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
+
+/** 실제 컨텍스트(H2) + 가짜 LLM + JSON 직렬화 + 공통 에러 핸들러까지 확인한다. */
+@SpringBootTest
+@AutoConfigureMockMvc
+@Import(FakeLlmConfig.class)
+class ImprovementAnalysisIntegrationTest {
+
+    static final String URL = "/api/v1/improvement-analyses";
+    static final String BODY = """
+            {"criteria":{"district":"수지구","dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}}""";
+
+    @Autowired MockMvc mvc;
+    @Autowired FakeLlmClient llm;
+    @Autowired AiAnalysisRepository aiRepository;
+    @Autowired FacilityTypeRepository typeRepository;
+    @Autowired FacilityRepository facilityRepository;
+    @Autowired FacilitySpaceRepository spaceRepository;
+    @Autowired OperatingHourRepository hourRepository;
+    @Autowired FacilityAmenityRepository amenityRepository;
+
+    Facility facility;
+
+    @BeforeEach
+    void setUp() {
+        llm.reset();
+        aiRepository.deleteAll();
+        amenityRepository.deleteAll();
+        hourRepository.deleteAll();
+        spaceRepository.deleteAll();
+        facilityRepository.deleteAll();
+        typeRepository.deleteAll();
+        FacilityType type = typeRepository.save(FacilityType.builder().name("도서관")
+                .chipGroup(ChipGroup.LIBRARY).defaultImage("/img/lib.png").build());
+        facility = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
+                .sourceKey("it-1").district("수지구").accessType(AccessType.OPEN_HOURS).name("예시 공공도서관")
+                .address("용인시 수지구 예시 주소").latitude(new BigDecimal("37.32")).longitude(new BigDecimal("127.1"))
+                .build());
+        spaceRepository.save(new FacilitySpace(facility.getFacilityId(), SpaceType.GENERAL, "종합자료실"));
+        hourRepository.save(OperatingHour.builder().facilityId(facility.getFacilityId()).spaceType(SpaceType.GENERAL)
+                .dayOfWeek((short) 1).intervalSeq((short) 1).dayState(DayState.OPEN)
+                .openMin((short) 540).closeMin((short) 1080).build());
+    }
+
+    @Test
+    void CREATED_다음_HIT_json_계약() throws Exception {
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.criteria.keyword").value((Object) null))
+                .andExpect(jsonPath("$.data.criteria.facilityTypeIds").isEmpty())
+                .andExpect(jsonPath("$.data.criteria.endTime").value("21:00"))
+                .andExpect(jsonPath("$.data.candidateCount").value(1))
+                .andExpect(jsonPath("$.data.facilityCount").value(1))
+                .andExpect(jsonPath("$.data.unknownSpaceCount").value(0))
+                .andExpect(jsonPath("$.data.items[0].facility.facilityId")
+                        .value(String.valueOf(facility.getFacilityId())))
+                .andExpect(jsonPath("$.data.items[0].facility.imageUrl").value("/img/lib.png"))
+                .andExpect(jsonPath("$.data.items[0].facility.coordinates.latitude").value(37.32))
+                .andExpect(jsonPath("$.data.items[0].spaceType").value("GENERAL"))
+                .andExpect(jsonPath("$.data.items[0].selectedSchedule.intervals[0].closeTime").value("18:00"))
+                .andExpect(jsonPath("$.data.items[0].availability.status").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].availability.unavailableIntervals[0].startTime").value("19:00"))
+                .andExpect(jsonPath("$.data.items[0].currentClosingTime").value("18:00"))
+                .andExpect(jsonPath("$.data.items[0].proposedClosingTime").value("21:00"))
+                .andExpect(jsonPath("$.data.items[0].proposalStatus").value("GENERATED"))
+                .andExpect(jsonPath("$.data.items[0].alternatives[0]").isString())
+                .andExpect(jsonPath("$.data.items[0].integratedSuggestion.status").value("PARTIAL"))
+                .andExpect(jsonPath("$.data.items[0].transport.status").value("NOT_ENABLED"))
+                .andExpect(jsonPath("$.data.items[0].transport.radiusMeters").value(500))
+                .andExpect(jsonPath("$.data.items[0].transport.stopCount").value((Object) null))
+                .andExpect(jsonPath("$.data.items[0].weakTimeAnalysis.status").value("NOT_SUPPORTED"))
+                .andExpect(jsonPath("$.data.items[0].weakTimeAnalysis.periods").isEmpty())
+                .andExpect(jsonPath("$.data.items[0].suggestionId").isString())
+                .andExpect(jsonPath("$.data.items[0].cache.status").value("CREATED"))
+                .andExpect(jsonPath("$.data.items[0].cache.createdAt").isString())
+                .andExpect(jsonPath("$.data.items[0].limitations").isNotEmpty())
+                .andExpect(jsonPath("$.data.disclaimer").isString())
+                .andExpect(jsonPath("$.meta.warnings[0].code").value("WEEKLY_SCHEDULE_ONLY"));
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.items[0].cache.status").value("HIT"));
+
+        assertThat(llm.calls.get()).isEqualTo(1);
+        assertThat(aiRepository.count()).isEqualTo(1);
+    }
+
+    @Test
+    void LLM이_실패해도_200이고_후보_정보는_유지된다() throws Exception {
+        llm.fail = true;
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.candidateCount").value(1))
+                .andExpect(jsonPath("$.data.items[0].proposalStatus").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].proposedClosingTime").value((Object) null))
+                .andExpect(jsonPath("$.data.items[0].alternatives").isEmpty())
+                .andExpect(jsonPath("$.data.items[0].integratedSuggestion.status").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].integratedSuggestion.text").value((Object) null))
+                .andExpect(jsonPath("$.data.items[0].suggestionId").value((Object) null))
+                .andExpect(jsonPath("$.data.items[0].cache.status").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].cache.createdAt").value((Object) null))
+                .andExpect(jsonPath("$.data.items[0].availability.status").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.meta.warnings[?(@.code=='LLM_UNAVAILABLE')].facilityId")
+                        .value(String.valueOf(facility.getFacilityId())));
+    }
+
+    @Test
+    void 후보_0건이면_빈_items와_함께_200이다() throws Exception {
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"criteria\":{\"district\":\"처인구\",\"dayOfWeek\":1,"
+                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.candidateCount").value(0))
+                .andExpect(jsonPath("$.data.facilityCount").value(0))
+                .andExpect(jsonPath("$.data.items").isEmpty());
+        assertThat(llm.calls.get()).isZero();
+    }
+
+    @Test
+    void 오류는_공통_봉투를_쓴다() throws Exception {
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"21:00\",\"endTime\":\"19:00\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_TIME_RANGE"))
+                .andExpect(jsonPath("$.error.details[0].field").value("criteria.endTime"));
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"criteria\":{\"dayOfWeek\":7,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error.details[0].field").value("criteria.dayOfWeek"));
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"criteria\":{\"dayOfWeek\":1,\"endTime\":\"21:00\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details[?(@.field=='criteria.startTime')]").isNotEmpty());
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"criteria\":{\"facilityTypeIds\":[9999],\"dayOfWeek\":1,"
+                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.details[0].field").value("criteria.facilityTypeIds"));
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"criteria\":{\"district\":\"서울\",\"dayOfWeek\":1,"
+                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
+        mvc.perform(post(URL).contentType(MediaType.TEXT_PLAIN).content(BODY))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.error.code").value("UNSUPPORTED_MEDIA_TYPE"));
+        assertThat(llm.calls.get()).isZero();
+    }
+}
