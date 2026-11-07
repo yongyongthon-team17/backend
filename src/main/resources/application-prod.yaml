@@ -17,3 +17,7 @@ springdoc:
     enabled: false
   swagger-ui:
     enabled: false
+
+app:
+  llm:
+    model: gpt-6.1-terra

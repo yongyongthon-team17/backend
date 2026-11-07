@@ -31,3 +31,17 @@ springdoc:
     path: /v3/api-docs
   swagger-ui:
     path: /swagger-ui.html
+
+# AI 개선안(A04). 키는 환경 변수 OPENAI_API_KEY로만 읽는다(값을 이 파일에 쓰지 않는다).
+# 모델은 프로파일별: 기본(local·test)=gpt-6-luna, prod=gpt-6.1-terra (application-prod.yaml)
+app:
+  llm:
+    api-key: ${OPENAI_API_KEY:}
+    base-url: https://api.openai.com/v1
+    model: gpt-6-luna
+    reasoning-effort: low
+    timeout: 20s
+    request-deadline: 30s
+    max-output-tokens: 2000
+    max-concurrency: 4
+    max-generations-per-request: 10
