@@ -40,6 +40,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -71,21 +72,26 @@ public class ImprovementAnalysisService {
     private final LlmClient llm;
     private final LlmProperties props;
     private final ExecutorService executor;
+    /** app.analysis.transport-link.enabled: false이면 모든 항목의 transport가 NOT_ENABLED이고 정류장 수를 LLM에 보내지 않는다 */
+    private final boolean transportLinkEnabled;
 
     public ImprovementAnalysisService(SearchCriteriaNormalizer normalizer, ImprovementCandidateFinder finder,
                                       ImprovementCache cache, LlmClient llm, LlmProperties props,
-                                      @Qualifier(AnalysisConfig.LLM_EXECUTOR) ExecutorService executor) {
+                                      @Qualifier(AnalysisConfig.LLM_EXECUTOR) ExecutorService executor,
+                                      @Value("${app.analysis.transport-link.enabled:true}") boolean transportLinkEnabled) {
         this.normalizer = normalizer;
         this.finder = finder;
         this.cache = cache;
         this.llm = llm;
         this.props = props;
         this.executor = executor;
+        this.transportLinkEnabled = transportLinkEnabled;
     }
 
     /** 후보 한 건의 처리 상태 */
     private static final class Prepared {
         final Candidate candidate;
+        final Accessibility transport;
         final String factsJson;
         final String sourceHash;
         final String scopeKey;
@@ -95,8 +101,10 @@ public class ImprovementAnalysisService {
         Outcome outcome; // HIT 또는 한도 초과처럼 이미 정해졌으면 채움
         volatile boolean llmCalled; // 워커 스레드가 LLM을 실제로 호출했는지 (로그용)
 
-        Prepared(Candidate candidate, String factsJson, String sourceHash, String scopeKey, String paramsKey) {
+        Prepared(Candidate candidate, Accessibility transport, String factsJson, String sourceHash, String scopeKey,
+                 String paramsKey) {
             this.candidate = candidate;
+            this.transport = transport;
             this.factsJson = factsJson;
             this.sourceHash = sourceHash;
             this.scopeKey = scopeKey;
@@ -150,10 +158,12 @@ public class ImprovementAnalysisService {
         // 4) 캐시 조회: 후보 순서(facilityId, spaceType) 그대로. HIT은 LLM을 호출하지 않는다
         List<Prepared> prepared = new ArrayList<>();
         for (Candidate c : candidates) {
-            Facts facts = ImprovementPrompt.facts(c);
+            // 이미 로드된 Facility.busStopCount를 읽는다(추가 쿼리 없음)
+            Accessibility transport = ImprovementTransport.of(c, transportLinkEnabled);
+            Facts facts = ImprovementPrompt.facts(c, transport);
             String factsJson = ImprovementPrompt.factsJson(facts);
             long fid = c.facility().getFacilityId();
-            Prepared p = new Prepared(c, factsJson, ImprovementPrompt.sourceHash(factsJson),
+            Prepared p = new Prepared(c, transport, factsJson, ImprovementPrompt.sourceHash(factsJson),
                     ImprovementCache.scopeKey(fid),
                     ImprovementCache.paramsKey(c.spaceType(), c.dayOfWeek(), c.startMin(), c.endMin()));
             lookup(p);
@@ -190,6 +200,14 @@ public class ImprovementAnalysisService {
         List<ImprovementItem> items = new ArrayList<>();
         for (Prepared p : prepared) {
             p.outcome.warnings().forEach(w -> addWarning(warnings, w));
+            // A05 컨트롤러와 같은 코드·문구. NOT_ENABLED는 경고하지 않는다. (code, facilityId)당 한 번만 담긴다
+            if (p.transport.status() == Status.NO_DATA) {
+                addWarning(warnings, Warning.of(WarningCode.TRANSPORT_DATA_UNAVAILABLE,
+                        "교통 정보를 확인할 수 없습니다.", facilityId(p)));
+            } else if (p.transport.status() == Status.AVAILABLE) {
+                addWarning(warnings, Warning.of(WarningCode.GRADE_RULE_NOT_DEFINED,
+                        "정류장 수는 제공하지만 등급 기준은 미정입니다.", facilityId(p)));
+            }
             // 키·요청/응답 본문·헤더는 남기지 않는다. 시설·공간 식별자와 처리 결과만 기록한다
             log.info("A04 분석 facilityId={} space={} cache={} llmCalled={}", p.candidate.facility().getFacilityId(),
                     p.candidate.spaceType(), p.outcome.cacheStatus(), p.llmCalled);
@@ -335,15 +353,14 @@ public class ImprovementAnalysisService {
                 f.getType().getName(), f.getDistrict(), f.getAccessType().name(), f.getName(), f.getAddress(),
                 f.getType().getDefaultImage(), new Coordinates(f.getLatitude(), f.getLongitude()));
         String currentClosing = c.currentCloseMin() == null ? null : TimeText.format(c.currentCloseMin());
-        Accessibility transport = new Accessibility(Status.NOT_ENABLED, 500, null, null,
-                List.of("교통 접근성 분석은 아직 제공되지 않습니다."));
+        Accessibility transport = p.transport;
         WeakTimeAnalysis weak = new WeakTimeAnalysis("NOT_SUPPORTED", List.of());
 
         if (o.payload() == null) {
             return new ImprovementItem(base, c.spaceType().name(), c.spaceLabel(), c.selectedSchedule(),
                     c.availability(), currentClosing, null, "UNAVAILABLE", o.failReason(), List.of(),
                     new IntegratedSuggestion("UNAVAILABLE", null), transport, weak, null,
-                    new CacheInfo(UNAVAILABLE, null), limitations(c));
+                    new CacheInfo(UNAVAILABLE, null), limitations(c, transport));
         }
         ImprovementPayload pl = o.payload();
         boolean stored = o.analysisId() != null;
@@ -355,7 +372,7 @@ public class ImprovementAnalysisService {
                 stored ? String.valueOf(o.analysisId()) : null,
                 new CacheInfo(o.cacheStatus(), stored && o.time() != null
                         ? o.time().atZone(Meta.ZONE).toOffsetDateTime().truncatedTo(ChronoUnit.SECONDS) : null),
-                limitations(c));
+                limitations(c, transport));
     }
 
     /** 서버가 사실(구간 차이, 예약 여부)로 정하는 설명. LLM 문장이 아니다. */
@@ -376,10 +393,13 @@ public class ImprovementAnalysisService {
         return reason;
     }
 
-    private static List<String> limitations(Candidate c) {
+    private static List<String> limitations(Candidate c, Accessibility transport) {
+        String transportLimit = transport.status() == Status.AVAILABLE
+                ? "정류장 개수 외 시간대별 운행자료가 없습니다."
+                : "교통·운행 자료를 반영하지 않았습니다.";
         List<String> list = new ArrayList<>(List.of(
                 "주간 정규시간 기준이며 공휴일·주차별 휴관을 판정하지 않습니다.",
-                "교통·운행 자료를 반영하지 않았습니다.",
+                transportLimit,
                 "운영 인력·예산·시설 규정을 검토한 확정 정책이 아닙니다."));
         if (c.requiresReservation()) {
             list.add("예약제 시설입니다. 운영시간만 비교했으며 예약 가능 여부는 판단하지 않습니다.");

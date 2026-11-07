@@ -97,7 +97,7 @@ class ImprovementAnalysisIntegrationTest {
                 .andExpect(jsonPath("$.data.items[0].proposalStatus").value("GENERATED"))
                 .andExpect(jsonPath("$.data.items[0].alternatives[0]").isString())
                 .andExpect(jsonPath("$.data.items[0].integratedSuggestion.status").value("PARTIAL"))
-                .andExpect(jsonPath("$.data.items[0].transport.status").value("NOT_ENABLED"))
+                .andExpect(jsonPath("$.data.items[0].transport.status").value("NO_DATA"))
                 .andExpect(jsonPath("$.data.items[0].transport.radiusMeters").value(500))
                 .andExpect(jsonPath("$.data.items[0].transport.stopCount").value((Object) null))
                 .andExpect(jsonPath("$.data.items[0].weakTimeAnalysis.status").value("NOT_SUPPORTED"))
