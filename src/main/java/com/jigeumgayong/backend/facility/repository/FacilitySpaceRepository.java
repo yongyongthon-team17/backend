@@ -4,6 +4,7 @@ import com.jigeumgayong.backend.facility.domain.FacilitySpace;
 import com.jigeumgayong.backend.facility.domain.FacilitySpaceId;
 import com.jigeumgayong.backend.facility.domain.SpaceType;
 import java.util.Collection;
+import java.util.List;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -15,4 +16,7 @@ public interface FacilitySpaceRepository extends JpaRepository<FacilitySpace, Fa
     @Modifying
     @Query("delete from FacilitySpace s where s.id.facilityId = :facilityId and s.id.spaceType not in :keep")
     void deleteByFacilityIdExcept(@Param("facilityId") Long facilityId, @Param("keep") Collection<SpaceType> keep);
+
+    /** A02: 후보 시설들의 공간을 한 번에 조회 (N+1 방지) */
+    List<FacilitySpace> findByIdFacilityIdIn(Collection<Long> facilityIds);
 }
