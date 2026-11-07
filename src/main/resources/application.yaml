@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: backend
+  profiles:
+    default: local
+  jpa:
+    open-in-view: false
+  mvc:
+    problemdetails:
+      enabled: false
+  web:
+    resources:
+      add-mappings: false
+
+server:
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true
+
+logging:
+  pattern:
+    level: "%5p [%X{requestId:-}]"
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
