@@ -111,6 +111,12 @@ public class Facility {
         this.sourceUpdatedAt = sourceUpdatedAt;
     }
 
+    /** 교통 적재용. 정류장 계산 결과(수, 계산일)를 한 번에 바꾼다. */
+    public void updateBusStops(Integer busStopCount, LocalDate busCountedAt) {
+        this.busStopCount = busStopCount;
+        this.busCountedAt = busCountedAt;
+    }
+
     /**
      * B02 재적재 UPSERT용 (R17). (source_type, source_key)로 찾은 기존 행을 덮어쓴다.
      * 키 컬럼(source_type, source_key)과 PK는 바꾸지 않는다.

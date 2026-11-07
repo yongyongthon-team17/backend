@@ -46,6 +46,9 @@ class EtlRunner implements ApplicationRunner {
         log.info("ETL 완료: 시설 {}건(신규 {}, 갱신 {}), 공간 {}건, 운영시간 {}행, 새 편의시설 태그 {}건, 격리 {}건",
                 data.facilities().size(), result.created(), result.updated(), result.spaces(),
                 result.hourRows(), result.amenities(), data.quarantine().size());
+        long withBus = data.facilities().stream().filter(f -> f.getBusStopCount() != null).count();
+        log.info("ETL 교통: 정류장 수 계산 {}건, 미계산(NULL) {}건",
+                withBus, data.facilities().size() - withBus);
     }
 
     private void writeQuarantine(SeedData data) throws IOException {
