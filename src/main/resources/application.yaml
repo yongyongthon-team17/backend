@@ -35,6 +35,9 @@ springdoc:
 # AI 개선안(A04). 키는 환경 변수 OPENAI_API_KEY로만 읽는다(값을 이 파일에 쓰지 않는다).
 # 모델은 프로파일별: 기본(local·test)=gpt-6-luna, prod=gpt-6.1-terra (application-prod.yaml)
 app:
+  analysis:
+    transport-link:
+      enabled: true # false면 A04 transport=NOT_ENABLED, 정류장 수를 LLM에 보내지 않음
   llm:
     api-key: ${OPENAI_API_KEY:}
     base-url: https://api.openai.com/v1
