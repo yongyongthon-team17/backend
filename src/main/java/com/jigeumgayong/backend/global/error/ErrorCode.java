@@ -6,6 +6,8 @@ import org.springframework.http.HttpStatus;
 public enum ErrorCode {
 	INVALID_REQUEST(HttpStatus.BAD_REQUEST, "요청 형식이 올바르지 않습니다."),
 	INVALID_TIME_RANGE(HttpStatus.BAD_REQUEST, "시간 범위가 올바르지 않습니다."),
+	/** 존재하지 않는 경로 전용. 시설 조회 실패는 FACILITY_NOT_FOUND를 쓴다. */
+	NOT_FOUND(HttpStatus.NOT_FOUND, "요청한 경로를 찾을 수 없습니다."),
 	FACILITY_NOT_FOUND(HttpStatus.NOT_FOUND, "시설을 찾을 수 없습니다."),
 	METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "지원하지 않는 HTTP 메서드입니다."),
 	UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "지원하지 않는 Content-Type입니다."),
