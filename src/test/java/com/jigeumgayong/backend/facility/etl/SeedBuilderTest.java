@@ -47,6 +47,17 @@ class SeedBuilderTest {
     }
 
     @Test
+    void 모든_시설에_정류장_수와_계산일이_채워진다() {
+        assertThat(data.facilities()).allSatisfy(f -> {
+            assertThat(f.getBusStopCount()).isNotNull().isGreaterThanOrEqualTo(0);
+            assertThat(f.getBusCountedAt()).isNotNull();
+        });
+        // 정류장이 하나도 안 잡히는 시설만 있는 건 아니어야 한다 (정류장 파일이 실제로 쓰였는지 확인)
+        assertThat(data.facilities()).anyMatch(f -> f.getBusStopCount() > 0);
+        assertThat(data.notes()).containsKey("교통 정보 계산");
+    }
+
+    @Test
     void 모든_시설은_공간이_1개_이상이고_좌표와_행정구가_있다() {
         assertThat(data.facilities()).allSatisfy(f -> {
             assertThat(f.getSpaces()).isNotEmpty();

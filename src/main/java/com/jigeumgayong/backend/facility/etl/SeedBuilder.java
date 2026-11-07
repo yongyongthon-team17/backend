@@ -10,6 +10,9 @@ import com.jigeumgayong.backend.facility.etl.ExtraSources.ParkingTag;
 import com.jigeumgayong.backend.facility.etl.HourParser.Slot;
 import com.jigeumgayong.backend.facility.etl.SeedData.AmenityAssignment;
 import com.jigeumgayong.backend.facility.etl.SeedData.Quarantined;
+import com.jigeumgayong.backend.global.response.Meta;
+import java.io.UncheckedIOException;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -57,8 +60,33 @@ public class SeedBuilder {
             throw new IllegalStateException("데이터 규칙 위반:\n  " + String.join("\n  ", errors));
         }
 
+        applyBusStops(ok, notes);
         List<AmenityAssignment> amenities = amenities(ok);
         return new SeedData(ok, quarantine, amenities, notes);
+    }
+
+    /**
+     * seed/bus_stops.csv(용인 정류장)로 시설마다 반경 500m 정류장 수를 계산한다.
+     * 파일이 없거나 비어 있으면 아무것도 채우지 않는다(null = 미확인, 0으로 대체하지 않음).
+     */
+    private void applyBusStops(List<SourceFacility> facilities, Map<String, Integer> notes) {
+        BusStopCounter counter;
+        try {
+            counter = BusStopCounter.fromRows(CsvReader.read("bus_stops.csv"));
+        } catch (UncheckedIOException e) {
+            notes.put("정류장 파일 없음: 교통 정보를 계산하지 않음", facilities.size());
+            return;
+        }
+        if (counter.isEmpty()) {
+            notes.put("정류장 파일이 비어 있음: 교통 정보를 계산하지 않음", facilities.size());
+            return;
+        }
+        LocalDate counted = LocalDate.now(Meta.ZONE);
+        for (SourceFacility f : facilities) {
+            f.setBusStopCount(counter.countWithin(f.getLat(), f.getLng()));
+            f.setBusCountedAt(counted);
+        }
+        notes.put("교통 정보 계산", facilities.size());
     }
 
     /** 좌표가 없는 시설은 geo_cache.csv(주소 → 좌표)에서 채운다. 캐시에도 없으면 좌표 없음으로 격리된다. */

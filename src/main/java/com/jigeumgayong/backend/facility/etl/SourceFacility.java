@@ -36,6 +36,9 @@ class SourceFacility {
     private LocalDate updated;
     private Double lat;
     private Double lng;
+    /** 교통: 반경 500m 정류장 수와 계산일. 계산하지 못했으면 null (R14) */
+    private Integer busStopCount;
+    private LocalDate busCountedAt;
     /** 값이 있으면 격리 대상이다 (예: 수기 입력 hours 형식 오류) */
     private String invalidReason;
     @Builder.Default

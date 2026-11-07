@@ -65,13 +65,18 @@ public class FacilityLoader {
                         .district(f.getDistrict()).accessType(f.getAccessType())
                         .name(f.getName()).address(f.getAddress()).latitude(lat).longitude(lng)
                         .phone(f.getPhone()).closedDayNote(f.getNote()).sourceUpdatedAt(f.getUpdated())
+                        .busStopCount(f.getBusStopCount()).busCountedAt(f.getBusCountedAt())
                         .build());
                 created++;
             } else {
-                // 정류장 수(bus_stop_count)는 A05 담당이라 재적재로 지워지지 않게 기존 값을 넘긴다
+                // 정류장 정보는 아래에서 따로 처리한다. 계산 결과가 없을 때 기존 값이 지워지지 않게 현재 값을 넘긴다
                 facility.updateFromSource(type, f.getDistrict(), f.getAccessType(), f.getName(), f.getAddress(),
                         lat, lng, f.getPhone(), f.getNote(), facility.getBusStopCount(),
                         facility.getBusCountedAt(), f.getUpdated());
+                // 이번에 계산한 값이 있을 때만 덮어쓴다 (계산 실패·파일 없음 → 기존 값 보존)
+                if (f.getBusStopCount() != null) {
+                    facility.updateBusStops(f.getBusStopCount(), f.getBusCountedAt());
+                }
                 updated++;
             }
             Long facilityId = facility.getFacilityId();

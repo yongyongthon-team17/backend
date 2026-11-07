@@ -57,15 +57,39 @@ class FacilityLoaderTest {
     }
 
     @Test
-    void 재적재해도_facility_id와_건수가_그대로이고_정류장_수는_지워지지_않는다() {
+    void 교통_정보가_적재되고_다시_계산하지_못해도_기존_값이_지워지지_않는다() {
+        SeedData data = new SeedBuilder().build();
+        loader.load(data);
+        em.flush();
+        em.clear();
+
+        Facility sample = facilityRepository.findBySourceTypeAndSourceKey(SourceType.LIB_STD, "LIB-용인중앙도서관").orElseThrow();
+        Integer count = sample.getBusStopCount();
+        assertThat(count).isNotNull();
+        assertThat(sample.getBusCountedAt()).isNotNull();
+        em.clear();
+
+        // 정류장 파일을 못 읽은 재적재: 계산 결과가 null이어도 기존 값은 남는다
+        data.facilities().forEach(f -> {
+            f.setBusStopCount(null);
+            f.setBusCountedAt(null);
+        });
+        loader.load(data);
+        em.flush();
+        em.clear();
+
+        Facility again = facilityRepository.findBySourceTypeAndSourceKey(SourceType.LIB_STD, "LIB-용인중앙도서관").orElseThrow();
+        assertThat(again.getBusStopCount()).isEqualTo(count);
+        assertThat(again.getBusCountedAt()).isNotNull();
+    }
+
+    @Test
+    void 재적재해도_facility_id와_건수가_그대로이다() {
         SeedData data = new SeedBuilder().build();
         loader.load(data);
         em.flush();
         Map<String, Long> before = idsBySourceKey();
         long spacesBefore = count("facility_space");
-
-        Facility sample = facilityRepository.findBySourceTypeAndSourceKey(SourceType.LIB_STD, "LIB-용인중앙도서관").orElseThrow();
-        jdbc.update("update facility set bus_stop_count = 5 where facility_id = ?", sample.getFacilityId());
         em.clear();
 
         LoadResult second = loader.load(data);
@@ -79,8 +103,6 @@ class FacilityLoaderTest {
         assertThat(count("facility_space")).isEqualTo(spacesBefore);
         assertThat(count("facility_amenity")).isEqualTo(35);
         assertThat(count("facility_type")).isEqualTo(6);
-        assertThat(jdbc.queryForObject("select bus_stop_count from facility where facility_id = ?", Integer.class,
-                sample.getFacilityId())).isEqualTo(5);
     }
 
     private Map<String, Long> idsBySourceKey() {
