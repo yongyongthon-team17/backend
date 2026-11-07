@@ -30,6 +30,10 @@ public interface FacilityRepository extends JpaRepository<Facility, Long> {
                           @Param("typeIds") Collection<Short> typeIds,
                           @Param("keywordPattern") String keywordPattern);
 
+    /** A03 상세: type을 함께 가져와 별도 쿼리를 막는다 (type은 LAZY) */
+    @Query("select f from Facility f join fetch f.type where f.facilityId = :facilityId")
+    Optional<Facility> findDetailById(@Param("facilityId") Long facilityId);
+
     /** B02 재적재 UPSERT용 (R17) */
     Optional<Facility> findBySourceTypeAndSourceKey(SourceType sourceType, String sourceKey);
 }
