@@ -150,7 +150,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(first.integratedSuggestion().status()).isEqualTo("PARTIAL"); // COMPLETE 금지(T21)
         assertThat(first.suggestionId()).isNotNull();
         assertThat(first.cache().createdAt()).isNotNull();
-        assertThat(first.transport().status().name()).isEqualTo("NOT_ENABLED");
+        assertThat(first.transport().status().name()).isEqualTo("NO_DATA"); // 정류장 수 null (T20)
         assertThat(first.weakTimeAnalysis().status()).isEqualTo("NOT_SUPPORTED");
 
         assertThat(second.cache().status()).isEqualTo("HIT");
@@ -182,7 +182,7 @@ class ImprovementAnalysisServiceTest {
         AiAnalysis row = aiRepository.findAll().get(0);
 
         assertThat(row.getModelName()).isEqualTo("fake-model");
-        assertThat(row.getPromptVersion()).isEqualTo("imp-v1");
+        assertThat(row.getPromptVersion()).isEqualTo("imp-v2");
         assertThat(row.getSourceHash()).hasSize(64);
         assertThat(row.getScopeKey()).startsWith("FAC:");
         assertThat(row.getParamsKey()).isEqualTo("S:DEFAULT|D:1|T:1140-1260");
@@ -236,8 +236,136 @@ class ImprovementAnalysisServiceTest {
         ImprovementItem item = run().data().items().get(0);
 
         assertThat(item.cache().status()).isEqualTo("CREATED");
-        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v1");
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v2");
         assertThat(llm.calls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void 기존_imp_v1_캐시는_같은_행을_imp_v2로_재생성한다() {
+        closedEvening(AccessType.OPEN_HOURS);
+        String firstId = run().data().items().get(0).suggestionId();
+        AiAnalysis row = aiRepository.findAll().get(0);
+        row.regenerate(row.getPayload(), row.getSourceHash(), "imp-v1", row.getModelName());
+        aiRepository.saveAndFlush(row);
+
+        AnalysisResult r = run();
+
+        assertThat(r.data().items().get(0).cache().status()).isEqualTo("CREATED");
+        assertThat(r.data().items().get(0).suggestionId()).isEqualTo(firstId);
+        assertThat(aiRepository.count()).isEqualTo(1);
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v2");
+        assertThat(codes(r)).contains("CACHE_INVALIDATED");
+        assertThat(llm.calls.get()).isEqualTo(2);
+    }
+
+    private void setBusStops(Facility f, Integer count) {
+        f.updateBusStops(count, java.time.LocalDate.of(2026, 11, 1));
+        facilityRepository.save(f);
+    }
+
+    @Test
+    void 정류장_수가_있으면_AVAILABLE이고_facts에_들어간다() {
+        Facility f = closedEvening(AccessType.OPEN_HOURS);
+        setBusStops(f, 4);
+        java.util.List<String> inputs = new java.util.concurrent.CopyOnWriteArrayList<>();
+        llm.responder = facts -> {
+            inputs.add(facts);
+            return FakeLlmClient.validResponse(facts).replace("운영시간 조정을 검토할 수 있습니다.",
+                    "시설 500m 내 정류장은 4개이며, 실제 운행은 별도 확인이 필요합니다.");
+        };
+
+        AnalysisResult r = run();
+        ImprovementItem item = r.data().items().get(0);
+
+        assertThat(item.transport().status().name()).isEqualTo("AVAILABLE");
+        assertThat(item.transport().stopCount()).isEqualTo(4);
+        assertThat(item.transport().radiusMeters()).isEqualTo(500);
+        assertThat(item.transport().grade()).isNull();
+        assertThat(item.integratedSuggestion().status()).isEqualTo("PARTIAL");
+        assertThat(item.integratedSuggestion().text()).contains("정류장은 4개");
+        assertThat(item.weakTimeAnalysis().status()).isEqualTo("NOT_SUPPORTED");
+        assertThat(item.limitations()).contains("정류장 개수 외 시간대별 운행자료가 없습니다.");
+        assertThat(inputs.get(0)).contains("\"busStopCount\":4").contains("\"busStopRadiusMeters\":500");
+        assertThat(codes(r)).doesNotContain("TRANSPORT_DATA_UNAVAILABLE").contains("GRADE_RULE_NOT_DEFINED");
+        Warning grade = r.warnings().stream().filter(w -> w.code().equals("GRADE_RULE_NOT_DEFINED")).findFirst().orElseThrow();
+        assertThat(grade.message()).isEqualTo("정류장 수는 제공하지만 등급 기준은 미정입니다."); // A05와 같은 문구
+        assertThat(grade.facilityId()).isEqualTo(item.facility().facilityId());
+    }
+
+    @Test
+    void 같은_시설의_공간이_여럿이어도_등급_경고는_시설당_한_번이다() {
+        Facility f = facility(AccessType.OPEN_HOURS);
+        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.GENERAL, "종합자료실"));
+        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.READING, "열람실"));
+        open(f, SpaceType.GENERAL, 540, 1080);
+        open(f, SpaceType.READING, 540, 1080);
+        setBusStops(f, 3);
+
+        AnalysisResult r = run();
+
+        assertThat(r.data().items()).hasSize(2);
+        assertThat(codes(r).stream().filter("GRADE_RULE_NOT_DEFINED"::equals)).hasSize(1);
+    }
+
+    @Test
+    void 정류장_수가_0이면_NO_DATA가_아니라_AVAILABLE_0이다() {
+        setBusStops(closedEvening(AccessType.OPEN_HOURS), 0);
+
+        ImprovementItem item = run().data().items().get(0);
+
+        assertThat(item.transport().status().name()).isEqualTo("AVAILABLE");
+        assertThat(item.transport().stopCount()).isZero();
+    }
+
+    @Test
+    void 정류장_수가_null이면_NO_DATA이고_facts에_정류장이_없으며_A05처럼_경고한다() {
+        closedEvening(AccessType.OPEN_HOURS);
+        java.util.List<String> inputs = new java.util.concurrent.CopyOnWriteArrayList<>();
+        llm.responder = facts -> {
+            inputs.add(facts);
+            return FakeLlmClient.validResponse(facts);
+        };
+
+        AnalysisResult r = run();
+
+        ImprovementItem item = r.data().items().get(0);
+        assertThat(item.transport().status().name()).isEqualTo("NO_DATA");
+        assertThat(item.transport().stopCount()).isNull();
+        assertThat(inputs.get(0)).doesNotContain("busStop");
+        assertThat(codes(r)).contains("TRANSPORT_DATA_UNAVAILABLE").doesNotContain("GRADE_RULE_NOT_DEFINED");
+        assertThat(item.limitations()).contains("교통·운행 자료를 반영하지 않았습니다.");
+    }
+
+    @Test
+    void 정류장_수가_바뀌면_source_hash가_달라져_같은_행을_재생성한다() {
+        Facility f = closedEvening(AccessType.OPEN_HOURS);
+        setBusStops(f, 4);
+        String firstId = run().data().items().get(0).suggestionId();
+        String hash = aiRepository.findAll().get(0).getSourceHash();
+        assertThat(run().data().items().get(0).cache().status()).isEqualTo("HIT");
+
+        setBusStops(f, 6);
+        AnalysisResult r = run();
+
+        ImprovementItem item = r.data().items().get(0);
+        assertThat(item.cache().status()).isEqualTo("CREATED");
+        assertThat(item.suggestionId()).isEqualTo(firstId);
+        assertThat(aiRepository.count()).isEqualTo(1);
+        assertThat(aiRepository.findAll().get(0).getSourceHash()).isNotEqualTo(hash);
+        assertThat(codes(r)).contains("CACHE_INVALIDATED");
+        assertThat(llm.calls.get()).isEqualTo(2); // T16
+    }
+
+    @Test
+    void LLM이_정류장_수로_배차_정보를_말하면_저장하지_않는다() {
+        setBusStops(closedEvening(AccessType.OPEN_HOURS), 4);
+        llm.responder = facts -> FakeLlmClient.validResponse(facts).replace("운영시간 조정을 검토할 수 있습니다.",
+                "정류장 4개가 있어 4분 간격 배차가 가능합니다.");
+
+        ImprovementItem item = run().data().items().get(0);
+
+        assertThat(item.proposalStatus()).isEqualTo("UNAVAILABLE");
+        assertThat(aiRepository.count()).isZero(); // T30
     }
 
     @Test

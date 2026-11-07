@@ -117,6 +117,62 @@ class ImprovementPayloadTest {
         }
     }
 
+    /** 정류장 4개가 AVAILABLE로 들어간 facts */
+    static final String FACTS_STOPS = FACTS.substring(0, FACTS.length() - 1)
+            + ",\"busStopCount\":4,\"busStopRadiusMeters\":500}";
+
+    private static void assertRejected(String facts, String text) {
+        assertThatThrownBy(() -> ImprovementPayload.fromLlm(llm("\"21:00\"", OK_ALT, text),
+                candidate(true, false), facts)).as(text).isInstanceOf(InvalidPayloadException.class);
+        assertThatThrownBy(() -> ImprovementPayload.fromLlm(
+                llm("\"21:00\"", "[\"" + text + "\"]", "검토합니다."), candidate(true, false), facts))
+                .as(text).isInstanceOf(InvalidPayloadException.class);
+    }
+
+    @Test
+    void AVAILABLE이면_정류장_수와_반경은_단위가_붙은_형태로만_허용한다() {
+        ImprovementPayload.fromLlm(llm("\"21:00\"", OK_ALT,
+                "시설 500m 내 정류장은 4개이며 실제 운행은 별도 확인이 필요합니다."), candidate(true, false), FACTS_STOPS);
+        ImprovementPayload.fromLlm(llm("\"21:00\"", OK_ALT, "정류장이 4곳 있습니다."),
+                candidate(true, false), FACTS_STOPS);
+    }
+
+    @Test
+    void 정류장_수와_다른_N개_N곳은_거부한다() {
+        for (String text : new String[] { "정류장은 5개입니다.", "정류장이 3곳 있습니다.", "반경 300m 내 정류장은 4개입니다." }) {
+            assertRejected(FACTS_STOPS, text);
+        }
+    }
+
+    @Test
+    void 정류장_수와_같은_숫자라도_다른_의미면_거부한다() {
+        // T30: 4는 정류장 수일 뿐 분·시간 같은 값이 아니다
+        for (String text : new String[] { "4분 간격으로 운행합니다.", "배차 간격은 정류장 수를 고려해 검토합니다.",
+                "막차는 늦게까지 있습니다.", "첫차 시간을 확인합니다.", "운행 간격이 짧습니다.", "도착 시간이 빠릅니다.",
+                "정류장 4개로 4분 간격 운행이 가능합니다.", "4시에 도착합니다." }) {
+            assertRejected(FACTS_STOPS, text);
+        }
+    }
+
+    @Test
+    void 일반_단어_도착은_막지_않는다() {
+        ImprovementPayload.fromLlm(llm("\"21:00\"", OK_ALT, "도착 후 이용 가능 여부는 별도 확인하세요."),
+                candidate(true, false), FACTS);
+    }
+
+    @Test
+    void 정류장_수가_입력에_없으면_정류장_언급과_N개_N곳을_거부한다() {
+        for (String text : new String[] { "정류장이 가까워 이용하기 좋습니다.", "정류장 4개가 있습니다.", "500m 내에 있습니다." }) {
+            assertRejected(FACTS, text);
+        }
+    }
+
+    @Test
+    void 개월_같은_다른_단위는_정류장_수로_보지_않는다() {
+        assertRejected(FACTS, "3개월 시범 운영을 검토합니다."); // 3은 원천에 없는 숫자라 거부
+        ImprovementPayload.fromLlm(llm("\"21:00\"", OK_ALT, "19시부터 21시까지 검토합니다."), candidate(true, false), FACTS);
+    }
+
     @Test
     void 입력에_있는_시각의_숫자는_허용한다() {
         ImprovementPayload.fromLlm(llm("\"21:00\"", "[\"09:00에 열고 18:00에 닫는 현재 운영을 19시, 21시까지로 늘립니다.\"]",

@@ -130,7 +130,7 @@ class ImprovementAnalysisPostgresTest {
                 .scopeKey(existing.getScopeKey()).analysisType(AnalysisType.IMPROVEMENT)
                 .paramsKey(existing.getParamsKey()).facilityId(existing.getFacilityId())
                 .spaceType(existing.getSpaceType()).payload(existing.getPayload())
-                .sourceHash(existing.getSourceHash()).promptVersion("imp-v1").build()))
+                .sourceHash(existing.getSourceHash()).promptVersion("imp-v2").build()))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
         AiAnalysis found = aiRepository.findByScopeKeyAndAnalysisTypeAndParamsKey(
@@ -182,7 +182,7 @@ class ImprovementAnalysisPostgresTest {
                 .scopeKey("FAC:" + facility.getFacilityId()).analysisType(AnalysisType.IMPROVEMENT)
                 .paramsKey("S:READING|D:1|T:1140-1260").facilityId(facility.getFacilityId())
                 .spaceType(SpaceType.READING) // 이 시설엔 READING 공간이 없다
-                .payload("{\"a\":1}").sourceHash("a".repeat(64)).promptVersion("imp-v1").build()))
+                .payload("{\"a\":1}").sourceHash("a".repeat(64)).promptVersion("imp-v2").build()))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 }
