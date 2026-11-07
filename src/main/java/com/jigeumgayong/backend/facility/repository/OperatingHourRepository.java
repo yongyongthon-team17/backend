@@ -16,6 +16,14 @@ public interface OperatingHourRepository extends JpaRepository<OperatingHour, Op
     @Query("delete from OperatingHour h where h.id.facilityId = :facilityId")
     void deleteByFacilityId(@Param("facilityId") Long facilityId);
 
+    /** A03: 한 시설의 전체 요일 운영시간 */
+    @Query("""
+            select h from OperatingHour h
+            where h.id.facilityId = :facilityId
+            order by h.id.spaceType, h.id.dayOfWeek, h.id.intervalSeq
+            """)
+    List<OperatingHour> findAllByFacilityId(@Param("facilityId") Long facilityId);
+
     /** A02: 후보 시설들의 선택 요일 운영시간을 한 번에 조회 (0=월 … 6=일) */
     @Query("""
             select h from OperatingHour h
