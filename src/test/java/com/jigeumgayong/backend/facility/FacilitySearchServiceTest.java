@@ -19,6 +19,7 @@ import com.jigeumgayong.backend.facility.repository.FacilitySpaceRepository;
 import com.jigeumgayong.backend.facility.repository.FacilityTypeRepository;
 import com.jigeumgayong.backend.facility.repository.OperatingHourRepository;
 import com.jigeumgayong.backend.facility.service.FacilitySearchService;
+import com.jigeumgayong.backend.facility.service.SearchCriteriaNormalizer;
 import com.jigeumgayong.backend.global.error.BusinessException;
 import com.jigeumgayong.backend.global.error.ErrorCode;
 import com.jigeumgayong.backend.support.H2PostgresJpaTest;
@@ -30,7 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Import;
 
 @H2PostgresJpaTest
-@Import(FacilitySearchService.class)
+@Import({FacilitySearchService.class, SearchCriteriaNormalizer.class})
 class FacilitySearchServiceTest {
 
     static final int MON = 0;

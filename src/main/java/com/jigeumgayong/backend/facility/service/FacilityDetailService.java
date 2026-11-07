@@ -117,7 +117,7 @@ public class FacilityDetailService {
                                            boolean reservation) {
         List<DaySchedule> week = new ArrayList<>();
         for (int d = 0; d < 7; d++) {
-            week.add(daySchedule(d, byDay.getOrDefault(d, List.of())));
+            week.add(OperatingHours.daySchedule(d, byDay.getOrDefault(d, List.of())));
         }
         DaySchedule selected = week.get(dayOfWeek);
 
@@ -138,16 +138,6 @@ public class FacilityDetailService {
             default -> new Availability("UNKNOWN", "WEEKLY_SCHEDULE", reservation, null);
         };
         return new SpaceDetail(type.name(), label, selected, availability, week);
-    }
-
-    /** 한 요일의 행들 → DaySchedule. OPEN 구간 > CLOSED > UNKNOWN 순으로 우선한다. */
-    private static DaySchedule daySchedule(int day, List<OperatingHour> rows) {
-        List<Span> open = OperatingHours.openSpans(rows);
-        if (open != null) {
-            return new DaySchedule(day, "OPEN", OperatingHours.toIntervals(open));
-        }
-        boolean closed = rows.stream().anyMatch(h -> h.getDayState() == DayState.CLOSED);
-        return new DaySchedule(day, closed ? "CLOSED" : "UNKNOWN", List.of());
     }
 
     /** detail 문구가 있으면 그대로, 없으면 코드 라벨. READING 공간이 있으면 '열람실'을 맨 앞에. */
