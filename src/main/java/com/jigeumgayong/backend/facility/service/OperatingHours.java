@@ -2,6 +2,7 @@ package com.jigeumgayong.backend.facility.service;
 
 import com.jigeumgayong.backend.facility.domain.DayState;
 import com.jigeumgayong.backend.facility.domain.OperatingHour;
+import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.DaySchedule;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.TimeInterval;
 import com.jigeumgayong.backend.facility.service.TimeCoverage.Span;
 import java.util.ArrayList;
@@ -34,5 +35,15 @@ final class OperatingHours {
                 .sorted(Comparator.comparingInt(Span::open))
                 .map(s -> new TimeInterval(TimeText.format(s.open()), TimeText.format(s.close())))
                 .toList();
+    }
+
+    /** 한 요일의 행들 → DaySchedule. OPEN 구간 > CLOSED > UNKNOWN 순으로 우선한다. */
+    static DaySchedule daySchedule(int day, List<OperatingHour> rows) {
+        List<Span> open = openSpans(rows);
+        if (open != null) {
+            return new DaySchedule(day, "OPEN", toIntervals(open));
+        }
+        boolean closed = rows.stream().anyMatch(h -> h.getDayState() == DayState.CLOSED);
+        return new DaySchedule(day, closed ? "CLOSED" : "UNKNOWN", List.of());
     }
 }
