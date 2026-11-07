@@ -16,6 +16,7 @@ class ApiResponseTest {
 		assertThat(r.meta().warnings()).isEmpty();
 		assertThat(r.meta().requestId()).startsWith("req-");
 		assertThat(r.meta().generatedAt().getOffset().getTotalSeconds()).isEqualTo(9 * 3600);
+		assertThat(r.meta().generatedAt().getNano()).isZero();
 	}
 
 	@Test
