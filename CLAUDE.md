@@ -5,9 +5,9 @@ AI 기반 시간대별 생활 인프라 접근성 분석 서비스. 용인시 �
 
 ## 스택
 - Java 21, Spring Boot 4.1.2, Gradle(Groovy), Spring Data JPA, Validation, Lombok
-- 설정은 YAML (application.yml, application-local.yml, application-prod.yml)
+- 설정은 YAML (application.yaml, application-local.yaml, application-prod.yaml)
 - DB: 개발 H2(PostgreSQL 호환 모드), 운영 PostgreSQL
-- 패키지 루트: com.jigeumgayong
+- 패키지 루트: com.jigeumgayong.backend
 - AI: OpenAI API (중앙 해커톤 지급 크레딧 사용). 분석 결과는 ai_analysis 테이블에 캐시
   - 모델: 개발·테스트 gpt-6-luna, 시연 gpt-6.1-terra, 추론 수준(reasoning) low. 품질 부족 시에만 gpt-6.1-sol
   - 호출은 Responses API 기준. 구현 직전에 모델 ID와 사용법을 OpenAI 공식 문서로 다시 확인할 것
