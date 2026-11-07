@@ -24,7 +24,6 @@ import com.jigeumgayong.backend.global.error.BusinessException;
 import com.jigeumgayong.backend.global.error.ErrorCode;
 import com.jigeumgayong.backend.global.error.ErrorDetail;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -114,7 +113,7 @@ public class FacilitySearchService {
                     if (sp == null) {
                         continue;
                     }
-                    List<Span> open = openSpans(facilityHours.getOrDefault(type, List.of()));
+                    List<Span> open = OperatingHours.openSpans(facilityHours.getOrDefault(type, List.of()));
                     if (open == null) {
                         // 행 없음 / UNKNOWN: 휴관으로 보지 않고 제외 + 집계
                         if (hasUnknownOrNoRows(facilityHours.getOrDefault(type, List.of()))) {
@@ -123,11 +122,8 @@ public class FacilitySearchService {
                         continue; // CLOSED만 있으면 집계 없이 제외
                     }
                     if (TimeCoverage.covers(open, start, end)) {
-                        List<TimeInterval> intervals = open.stream()
-                                .sorted(Comparator.comparingInt(Span::open))
-                                .map(s -> new TimeInterval(TimeText.format(s.open()), TimeText.format(s.close())))
-                                .toList();
-                        available.add(space(type, sp.getSpaceName(), dayOfWeek, intervals, "WEEKLY_SCHEDULE",
+                        available.add(space(type, sp.getSpaceName(), dayOfWeek, OperatingHours.toIntervals(open),
+                                "WEEKLY_SCHEDULE",
                                 f.getAccessType() == AccessType.RESERVATION));
                     }
                 }
@@ -139,20 +135,6 @@ public class FacilitySearchService {
             }
         }
         return new FacilitySearchResponse(criteria, items, items.size(), matchedSpaces, unknownSpaces);
-    }
-
-    /**
-     * OPEN 구간(유효한 시각 쌍)만 모아 돌려준다. OPEN이 하나도 없으면 null.
-     * (DDL CHECK상 OPEN과 CLOSED/UNKNOWN은 같은 요일에 섞이지 않지만 방어적으로 OPEN을 우선한다.)
-     */
-    private static List<Span> openSpans(List<OperatingHour> rows) {
-        List<Span> spans = new ArrayList<>();
-        for (OperatingHour h : rows) {
-            if (h.getDayState() == DayState.OPEN && h.getOpenMin() != null && h.getCloseMin() != null) {
-                spans.add(new Span(h.getOpenMin(), h.getCloseMin()));
-            }
-        }
-        return spans.isEmpty() ? null : spans;
     }
 
     /** 행이 없거나, UNKNOWN이거나, OPEN인데 시각이 비어 있으면 true. CLOSED뿐이면 false. */
