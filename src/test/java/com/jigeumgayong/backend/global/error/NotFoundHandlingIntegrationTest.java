@@ -27,28 +27,35 @@ class NotFoundHandlingIntegrationTest {
 	}
 
 	@Test
-	void unknown_get_is_404_invalid_request_envelope() throws Exception {
+	void unknown_get_is_404_not_found_envelope() throws Exception {
 		mvc().perform(get("/api/v1/none"))
 				.andExpect(status().isNotFound())
 				.andExpect(header().exists("X-Request-Id"))
-				.andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+				.andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
 				.andExpect(jsonPath("$.error.message").value("요청한 경로를 찾을 수 없습니다."))
 				.andExpect(jsonPath("$.error.details").isEmpty())
 				.andExpect(jsonPath("$.error.requestId").isString());
 	}
 
 	@Test
+	void error_request_id_equals_response_header() throws Exception {
+		mvc().perform(get("/api/v1/none").header("X-Request-Id", "req-nf-1"))
+				.andExpect(header().string("X-Request-Id", "req-nf-1"))
+				.andExpect(jsonPath("$.error.requestId").value("req-nf-1"));
+	}
+
+	@Test
 	void unknown_post_is_404_envelope() throws Exception {
 		mvc().perform(post("/api/v1/none"))
 				.andExpect(status().isNotFound())
-				.andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
+				.andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
 	}
 
 	@Test
 	void root_and_favicon_are_404_envelope() throws Exception {
 		mvc().perform(get("/")).andExpect(status().isNotFound())
-				.andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
+				.andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
 		mvc().perform(get("/favicon.ico")).andExpect(status().isNotFound())
-				.andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
+				.andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
 	}
 }
