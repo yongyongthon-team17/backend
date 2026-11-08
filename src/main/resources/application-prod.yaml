@@ -19,5 +19,8 @@ springdoc:
     enabled: false
 
 app:
+  # 환경 변수로만 받는다. 비어 있으면 교차 출처를 허용하지 않는다. *는 쓰지 말고 정확한 출처만 적는다
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
   llm:
     model: gpt-6.1-terra
