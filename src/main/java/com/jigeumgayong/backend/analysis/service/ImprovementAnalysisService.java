@@ -368,11 +368,19 @@ public class ImprovementAnalysisService {
                 c.availability(), currentClosing,
                 pl.proposedCloseMin() == null ? null : TimeText.format(pl.proposedCloseMin()),
                 "GENERATED", reasonFor(c), pl.alternatives(),
-                new IntegratedSuggestion("PARTIAL", pl.integratedSuggestion()), transport, weak,
+                new IntegratedSuggestion(suggestionStatus(pl, transport), pl.integratedSuggestion()), transport, weak,
                 stored ? String.valueOf(o.analysisId()) : null,
                 new CacheInfo(o.cacheStatus(), stored && o.time() != null
                         ? o.time().atZone(Meta.ZONE).toOffsetDateTime().truncatedTo(ChronoUnit.SECONDS) : null),
                 limitations(c, transport));
+    }
+
+    /**
+     * 06 IntegratedSuggestion: 교통 근거(정류장 수)를 문장에 반영했으면 COMPLETE, 아니면 PARTIAL. 응답 시 판정하고 저장하지 않는다.
+     * 문장 속 숫자가 현재 정류장 수와 같은지는 ImprovementPayload 검증(HIT도 현재 facts로 재검증)이 보장한다.
+     */
+    private static String suggestionStatus(ImprovementPayload pl, Accessibility transport) {
+        return transport.status() == Status.AVAILABLE && pl.suggestionMentionsStopCount() ? "COMPLETE" : "PARTIAL";
     }
 
     /** 서버가 사실(구간 차이, 예약 여부)로 정하는 설명. LLM 문장이 아니다. */

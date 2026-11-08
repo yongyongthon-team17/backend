@@ -32,7 +32,7 @@ public record ImprovementAnalysisResponse(
             String proposalReason,
             List<String> alternatives,
             IntegratedSuggestion integratedSuggestion,
-            Accessibility transport, // A05와 같은 타입. A04에서는 NOT_ENABLED로만 채운다
+            Accessibility transport, // A05와 같은 타입. AVAILABLE / NO_DATA, 스위치 off·변환 예외 시 NOT_ENABLED
             WeakTimeAnalysis weakTimeAnalysis,
             String suggestionId,
             CacheInfo cache,
@@ -48,7 +48,7 @@ public record ImprovementAnalysisResponse(
     public record CacheInfo(String status, OffsetDateTime createdAt) {
     }
 
-    /** status: PARTIAL / UNAVAILABLE (교통 근거가 없어 COMPLETE는 쓰지 않는다) */
+    /** status: COMPLETE(교통 AVAILABLE + 문장에 정류장 수 포함) / PARTIAL / UNAVAILABLE. 응답 시 판정하며 DB에 저장하지 않는다 */
     public record IntegratedSuggestion(String status, String text) {
     }
 
