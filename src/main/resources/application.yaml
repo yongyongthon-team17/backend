@@ -48,3 +48,6 @@ app:
     max-output-tokens: 2000
     max-concurrency: 4
     max-generations-per-request: 10
+  # CORS 허용 출처(쉼표 구분). 비어 있으면 교차 출처를 허용하지 않는다. local 기본값은 application-local.yaml
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:}
