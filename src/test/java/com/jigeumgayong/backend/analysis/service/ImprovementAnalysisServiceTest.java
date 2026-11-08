@@ -147,7 +147,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(first.proposalStatus()).isEqualTo("GENERATED");
         assertThat(first.proposedClosingTime()).isEqualTo("21:00");
         assertThat(first.currentClosingTime()).isEqualTo("18:00");
-        assertThat(first.integratedSuggestion().status()).isEqualTo("PARTIAL"); // COMPLETE 금지(T21)
+        assertThat(first.integratedSuggestion().status()).isEqualTo("PARTIAL"); // 교통 근거 없음(NO_DATA) → PARTIAL
         assertThat(first.suggestionId()).isNotNull();
         assertThat(first.cache().createdAt()).isNotNull();
         assertThat(first.transport().status().name()).isEqualTo("NO_DATA"); // 정류장 수 null (T20)
@@ -157,6 +157,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(second.suggestionId()).isEqualTo(first.suggestionId());
         assertThat(second.cache().createdAt()).isEqualTo(first.cache().createdAt());
         assertThat(second.alternatives()).isEqualTo(first.alternatives());
+        assertThat(second.integratedSuggestion().status()).isEqualTo("PARTIAL");
         assertThat(llm.calls.get()).isEqualTo(1); // T15
     }
 
@@ -290,6 +291,74 @@ class ImprovementAnalysisServiceTest {
         Warning grade = r.warnings().stream().filter(w -> w.code().equals("GRADE_RULE_NOT_DEFINED")).findFirst().orElseThrow();
         assertThat(grade.message()).isEqualTo("정류장 수는 제공하지만 등급 기준은 미정입니다."); // A05와 같은 문구
         assertThat(grade.facilityId()).isEqualTo(item.facility().facilityId());
+    }
+
+    /** 입력에 busStopCount가 있으면 그 값으로 정류장 문장을 넣는 가짜 LLM (없으면 기본 응답) */
+    private void respondWithStops() {
+        llm.responder = facts -> {
+            String base = FakeLlmClient.validResponse(facts);
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("\"busStopCount\":(\\d+)").matcher(facts);
+            return m.find() ? base.replace("운영시간 조정을 검토할 수 있습니다.",
+                    "시설 500m 내 정류장은 " + m.group(1) + "개이며, 실제 운행은 별도 확인이 필요합니다.") : base;
+        };
+    }
+
+    @Test
+    void 정류장_수를_문장에_반영하면_CREATED와_HIT_모두_COMPLETE다() {
+        setBusStops(closedEvening(AccessType.OPEN_HOURS), 4);
+        respondWithStops();
+
+        ImprovementItem first = run().data().items().get(0);
+        ImprovementItem second = run().data().items().get(0);
+
+        assertThat(first.cache().status()).isEqualTo("CREATED");
+        assertThat(first.integratedSuggestion().status()).isEqualTo("COMPLETE");
+        assertThat(second.cache().status()).isEqualTo("HIT");
+        assertThat(second.integratedSuggestion().status()).isEqualTo("COMPLETE");
+        assertThat(llm.calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void 정류장_0개도_문장에_반영하면_COMPLETE다() {
+        setBusStops(closedEvening(AccessType.OPEN_HOURS), 0);
+        respondWithStops();
+
+        ImprovementItem item = run().data().items().get(0);
+
+        assertThat(item.transport().stopCount()).isZero();
+        assertThat(item.integratedSuggestion().text()).contains("정류장은 0개");
+        assertThat(item.integratedSuggestion().status()).isEqualTo("COMPLETE");
+    }
+
+    @Test
+    void AVAILABLE이어도_문장에_정류장_수가_없으면_CREATED와_HIT_모두_PARTIAL이다() {
+        setBusStops(closedEvening(AccessType.OPEN_HOURS), 4); // 기본 응답은 정류장을 언급하지 않는다
+
+        ImprovementItem first = run().data().items().get(0);
+        ImprovementItem second = run().data().items().get(0);
+
+        assertThat(first.transport().status().name()).isEqualTo("AVAILABLE");
+        assertThat(first.integratedSuggestion().status()).isEqualTo("PARTIAL");
+        assertThat(second.cache().status()).isEqualTo("HIT");
+        assertThat(second.integratedSuggestion().status()).isEqualTo("PARTIAL");
+    }
+
+    @Test
+    void 교통_자료가_없어지면_기존_COMPLETE_문장을_재사용하지_않는다() {
+        // T21: source_hash에 정류장 수가 들어 있어 NO_DATA로 바뀌면 재생성된다
+        Facility f = closedEvening(AccessType.OPEN_HOURS);
+        setBusStops(f, 4);
+        respondWithStops();
+        assertThat(run().data().items().get(0).integratedSuggestion().status()).isEqualTo("COMPLETE");
+
+        setBusStops(f, null);
+        ImprovementItem item = run().data().items().get(0);
+
+        assertThat(item.transport().status().name()).isEqualTo("NO_DATA");
+        assertThat(item.cache().status()).isEqualTo("CREATED");
+        assertThat(item.integratedSuggestion().text()).doesNotContain("정류장");
+        assertThat(item.integratedSuggestion().status()).isEqualTo("PARTIAL");
+        assertThat(llm.calls.get()).isEqualTo(2);
     }
 
     @Test

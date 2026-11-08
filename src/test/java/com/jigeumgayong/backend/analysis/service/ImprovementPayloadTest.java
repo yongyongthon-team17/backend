@@ -137,6 +137,21 @@ class ImprovementPayloadTest {
                 candidate(true, false), FACTS_STOPS);
     }
 
+    private static boolean mentions(String facts, String suggestion) {
+        return ImprovementPayload.fromLlm(llm("\"21:00\"", OK_ALT, suggestion), candidate(true, false), facts)
+                .suggestionMentionsStopCount();
+    }
+
+    @Test
+    void 통합_제안에_정류장과_N개_N곳이_함께_있어야_정류장_수를_언급한_것이다() {
+        assertThat(mentions(FACTS_STOPS, "시설 500m 내 정류장은 4개이며 실제 운행은 별도 확인이 필요합니다.")).isTrue();
+        assertThat(mentions(FACTS_STOPS, "정류장이 4곳 있습니다.")).isTrue();
+        assertThat(mentions(FACTS_STOPS, "21시까지 연장을 검토할 수 있습니다.")).isFalse();
+        assertThat(mentions(FACTS_STOPS, "정류장 이용은 별도 확인이 필요합니다.")).isFalse();
+        String zero = FACTS.substring(0, FACTS.length() - 1) + ",\"busStopCount\":0,\"busStopRadiusMeters\":500}";
+        assertThat(mentions(zero, "시설 500m 내 정류장은 0개입니다.")).isTrue();
+    }
+
     @Test
     void 정류장_수와_다른_N개_N곳은_거부한다() {
         for (String text : new String[] { "정류장은 5개입니다.", "정류장이 3곳 있습니다.", "반경 300m 내 정류장은 4개입니다." }) {

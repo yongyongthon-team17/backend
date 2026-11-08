@@ -74,5 +74,9 @@ class ImprovementTransportSwitchOffTest {
         assertThat(item.proposalStatus()).isEqualTo("GENERATED");
         assertThat(item.integratedSuggestion().status()).isEqualTo("PARTIAL");
         assertThat(inputs.get(0)).doesNotContain("busStop");
+
+        ImprovementItem hit = service.analyze(null, null, null, 1, "19:00", "21:00").data().items().get(0);
+        assertThat(hit.cache().status()).isEqualTo("HIT");
+        assertThat(hit.integratedSuggestion().status()).isEqualTo("PARTIAL");
     }
 }
