@@ -281,7 +281,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(item.transport().stopCount()).isEqualTo(4);
         assertThat(item.transport().radiusMeters()).isEqualTo(500);
         assertThat(item.transport().grade()).isNull();
-        assertThat(item.integratedSuggestion().status()).isEqualTo("PARTIAL");
+        assertThat(item.integratedSuggestion().status()).isEqualTo("COMPLETE");
         assertThat(item.integratedSuggestion().text()).contains("정류장은 4개");
         assertThat(item.weakTimeAnalysis().status()).isEqualTo("NOT_SUPPORTED");
         assertThat(item.limitations()).contains("정류장 개수 외 시간대별 운행자료가 없습니다.");

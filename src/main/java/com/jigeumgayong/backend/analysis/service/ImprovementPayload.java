@@ -166,12 +166,32 @@ record ImprovementPayload(Integer proposedCloseMin, List<String> alternatives, S
         Matcher m = UNIT_NUMBER.matcher(text);
         while (m.find()) {
             int n = Integer.parseInt(m.group(1));
-            boolean isCount = m.group(2).startsWith("개") || m.group(2).equals("곳");
-            Integer expected = isCount ? stopCount : radius;
+            Integer expected = isCountUnit(m.group(2)) ? stopCount : radius;
             if (expected == null || n != expected) {
                 throw new InvalidPayloadException("원천과 다른 정류장 관련 숫자: " + m.group().trim());
             }
         }
+    }
+
+    /**
+     * integratedSuggestion에 "정류장"과 정류장 수(N개·N곳)가 함께 들어 있는지. 검증을 통과한 payload에서만 호출한다.
+     * 숫자는 다시 비교하지 않는다: validate()가 문장 속 N개·N곳을 busStopCount와 같게 강제하기 때문이다.
+     */
+    boolean suggestionMentionsStopCount() {
+        if (!integratedSuggestion.contains("정류장")) {
+            return false;
+        }
+        Matcher m = UNIT_NUMBER.matcher(integratedSuggestion);
+        while (m.find()) {
+            if (isCountUnit(m.group(2))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isCountUnit(String unit) {
+        return unit.startsWith("개") || unit.equals("곳");
     }
 
     private static JsonNode parseFacts(String factsJson) {
