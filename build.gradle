@@ -38,4 +38,8 @@ dependencies {
 
 tasks.named('test') {
 	useJUnitPlatform()
+	// local 프로파일은 ETL·샘플을 기본으로 켜므로, 테스트에서는 꺼 둔다.
+	// @SpringBootTest(properties = ...)가 system property보다 우선이라 켜고 싶은 테스트는 직접 지정한다.
+	systemProperty 'app.etl.enabled', 'false'
+	systemProperty 'app.sample-data.enabled', 'false'
 }

@@ -15,3 +15,11 @@ spring:
     properties:
       hibernate:
         format_sql: true
+
+# 로컬 개발 데이터: 기동 시 공공데이터(ETL)와 로컬 전용 샘플을 적재한다.
+# 테스트에서는 build.gradle의 system property로 꺼진다.
+app:
+  etl:
+    enabled: true
+  sample-data:
+    enabled: true
