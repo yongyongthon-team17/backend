@@ -1,0 +1,123 @@
+name: Deploy
+
+# main에 머지되면 테스트 → 빌드 → EC2 배포. 수동 실행(workflow_dispatch)도 가능하다.
+# 필요한 GitHub Secrets (값은 레포·로그에 남기지 않는다):
+#   EC2_HOST        서버 주소(IP 또는 도메인)
+#   EC2_USER        SSH 사용자 (예: ubuntu)
+#   EC2_SSH_KEY     SSH 개인키 전체 내용(.pem 파일 내용). 파일 자체를 레포에 넣지 않는다
+#   EC2_KNOWN_HOSTS 서버 호스트 키 (로컬에서 `ssh-keyscan -H <EC2_HOST>` 출력)
+# DB 비밀번호·OPENAI_API_KEY 등 앱 설정은 서버의 /etc/jigeumgayong/env 에만 둔다. (deploy/README.md 참고)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 배포가 겹치지 않게 한 번에 하나만 실행한다
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  APP_DIR: /opt/jigeumgayong
+  SERVICE: jigeumgayong
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 테스트와 빌드
+        run: |
+          chmod +x gradlew
+          ./gradlew test bootJar --console=plain
+
+      - name: 실행 jar 한 개만 고르기
+        run: |
+          JAR=$(ls build/libs/*.jar | grep -v -- '-plain.jar' | head -n 1)
+          test -n "$JAR"
+          mkdir -p dist
+          cp "$JAR" dist/app.jar
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: dist/app.jar
+          retention-days: 7
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: dist
+
+      - name: SSH 설정
+        env:
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          EC2_KNOWN_HOSTS: ${{ secrets.EC2_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$EC2_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: jar 업로드
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER_NAME: ${{ secrets.EC2_USER }}
+        run: |
+          scp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            dist/app.jar "$USER_NAME@$HOST:$APP_DIR/app.jar.new"
+
+      - name: 교체 후 재시작
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER_NAME: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER_NAME@$HOST" bash -s <<EOF
+          set -e
+          cd $APP_DIR
+          # 이전 jar는 롤백용으로 남긴다
+          [ -f app.jar ] && mv app.jar app.jar.prev
+          mv app.jar.new app.jar
+          sudo systemctl restart $SERVICE
+          EOF
+
+      - name: 기동 확인 (최대 60초)
+        env:
+          HOST: ${{ secrets.EC2_HOST }}
+          USER_NAME: ${{ secrets.EC2_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes "$USER_NAME@$HOST" bash -s <<'EOF'
+          for i in $(seq 1 12); do
+            if curl -fsS http://localhost:8080/api/v1/facility-search-options > /dev/null; then
+              echo "기동 확인 완료"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "기동 확인 실패. 최근 로그:"
+          sudo journalctl -u jigeumgayong -n 50 --no-pager
+          exit 1
+          EOF
+
+      - name: 키 파일 정리
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
