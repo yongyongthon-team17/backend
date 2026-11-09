@@ -18,6 +18,9 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # 러너는 UTC라 LocalDate 테스트가 하루 어긋난다. 개발 PC와 같은 시간대로 맞춘다.
+      TZ: Asia/Seoul
     steps:
       - uses: actions/checkout@v4
 
