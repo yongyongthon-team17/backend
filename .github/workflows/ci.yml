@@ -1,0 +1,45 @@
+name: CI
+
+# PR과 main push마다 테스트를 돌린다. 배포는 deploy.yml이 맡는다.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # 러너는 UTC라 LocalDate 테스트가 하루 어긋난다. 개발 PC와 같은 시간대로 맞춘다.
+      TZ: Asia/Seoul
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 테스트
+        run: |
+          chmod +x gradlew
+          ./gradlew test --console=plain
+
+      - name: 테스트 리포트 업로드 (실패 시)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: build/reports/tests/test
+          retention-days: 7
