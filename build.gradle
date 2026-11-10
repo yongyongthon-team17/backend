@@ -42,4 +42,6 @@ tasks.named('test') {
 	// @SpringBootTest(properties = ...)가 system property보다 우선이라 켜고 싶은 테스트는 직접 지정한다.
 	systemProperty 'app.etl.enabled', 'false'
 	systemProperty 'app.sample-data.enabled', 'false'
+	// AI 호출 한도는 한도를 검증하는 테스트에서만 켠다(기존 A04 테스트가 한도에 걸리지 않게).
+	systemProperty 'app.llm.rate-limit.enabled', 'false'
 }

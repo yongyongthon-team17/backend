@@ -3,6 +3,7 @@ package com.jigeumgayong.backend.analysis.config;
 import com.jigeumgayong.backend.analysis.llm.LlmClient;
 import com.jigeumgayong.backend.analysis.llm.LlmProperties;
 import com.jigeumgayong.backend.analysis.llm.OpenAiLlmClient;
+import com.jigeumgayong.backend.analysis.ratelimit.RateLimitProperties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -13,7 +14,7 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Configuration
-@EnableConfigurationProperties(LlmProperties.class)
+@EnableConfigurationProperties({ LlmProperties.class, RateLimitProperties.class })
 public class AnalysisConfig {
 
     public static final String LLM_EXECUTOR = "improvementExecutor";

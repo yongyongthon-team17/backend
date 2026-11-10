@@ -97,6 +97,17 @@ class CorsIntegrationTest {
 	}
 
 	@Test
+	void preflight_allows_client_id_header_for_ai_rate_limit() throws Exception {
+		mvc.perform(options("/api/v1/improvement-analyses")
+						.header("Origin", ALLOWED)
+						.header("Access-Control-Request-Method", "POST")
+						.header("Access-Control-Request-Headers", "content-type,x-client-id"))
+				.andExpect(status().isOk())
+				.andExpect(header().string(ACAO, ALLOWED))
+				.andExpect(header().string("Access-Control-Allow-Headers", containsString("x-client-id")));
+	}
+
+	@Test
 	void preflight_with_unlisted_header_is_rejected() throws Exception {
 		mvc.perform(options("/api/v1/improvement-analyses")
 						.header("Origin", ALLOWED)
@@ -113,7 +124,7 @@ class CorsIntegrationTest {
 		mvc.perform(get("/api/v1/facility-search-options").header("Origin", ALLOWED))
 				.andExpect(status().isOk())
 				.andExpect(header().string(ACAO, ALLOWED))
-				.andExpect(header().string("Access-Control-Expose-Headers", "X-Request-Id"))
+				.andExpect(header().string("Access-Control-Expose-Headers", "X-Request-Id, Retry-After"))
 				.andExpect(header().stringValues("Vary", hasItem("Origin")))
 				.andExpect(header().exists("X-Request-Id"));
 	}

@@ -1,5 +1,6 @@
 package com.jigeumgayong.backend.analysis;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -10,11 +11,13 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jigeumgayong.backend.analysis.controller.ImprovementAnalysisController;
 import com.jigeumgayong.backend.analysis.dto.ImprovementAnalysisResponse;
+import com.jigeumgayong.backend.analysis.ratelimit.ClientKey;
 import com.jigeumgayong.backend.analysis.service.ImprovementAnalysisService;
 import com.jigeumgayong.backend.analysis.service.ImprovementAnalysisService.AnalysisResult;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.Criteria;
@@ -28,6 +31,7 @@ import com.jigeumgayong.backend.global.web.RequestIdFilter;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -59,7 +63,7 @@ class ImprovementAnalysisControllerTest {
 
     @Test
     void 정상_요청은_200_공통_봉투다() throws Exception {
-        when(service.analyze(any(), eq("수지구"), eq(List.of(1)), eq(1), eq("19:00"), eq("21:00")))
+        when(service.analyze(any(), eq("수지구"), eq(List.of(1)), eq(1), eq("19:00"), eq("21:00"), any()))
                 .thenReturn(empty());
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
@@ -98,7 +102,7 @@ class ImprovementAnalysisControllerTest {
 
     @Test
     void 서비스의_검증_오류는_공통_오류_형식으로_변환된다() throws Exception {
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString()))
+        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any()))
                 .thenThrow(new BusinessException(ErrorCode.INVALID_TIME_RANGE,
                         ErrorCode.INVALID_TIME_RANGE.defaultMessage(),
                         List.of(new ErrorDetail("endTime", "MUST_BE_AFTER_START_TIME"))));
@@ -126,12 +130,47 @@ class ImprovementAnalysisControllerTest {
 
     @Test
     void 선택_필드를_생략해도_서비스로_null이_전달된다() throws Exception {
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString())).thenReturn(empty());
+        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any())).thenReturn(empty());
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
                         .content("{\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
                 .andExpect(status().isOk());
 
-        verify(service).analyze(eq(null), eq(null), eq(null), eq(1), eq("19:00"), eq("21:00"));
+        verify(service).analyze(eq(null), eq(null), eq(null), eq(1), eq("19:00"), eq("21:00"), any());
+    }
+
+    @Test
+    void X_Client_Id와_X_Real_IP가_한도_키로_서비스에_전달된다() throws Exception {
+        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any())).thenReturn(empty());
+        String id = "3F2504E0-4F89-41D3-9A0C-0305E82C3301";
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY)
+                        .header("X-Client-Id", id).header("X-Real-IP", "198.51.100.7"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ClientKey> key = ArgumentCaptor.forClass(ClientKey.class);
+        verify(service).analyze(any(), any(), any(), anyInt(), anyString(), anyString(), key.capture());
+        assertThat(key.getValue().clientId()).isEqualTo(id.toLowerCase());
+        assertThat(key.getValue().ip()).isEqualTo("198.51.100.7"); // MockMvc의 원격 주소는 루프백
+    }
+
+    @Test
+    void 한도에_걸린_항목이_있으면_Retry_After_헤더를_준다() throws Exception {
+        AnalysisResult base = empty();
+        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(new AnalysisResult(base.data(), base.warnings(), 42L));
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Retry-After", "42"));
+    }
+
+    @Test
+    void 한도에_걸리지_않으면_Retry_After_헤더가_없다() throws Exception {
+        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any())).thenReturn(empty());
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+                .andExpect(status().isOk())
+                .andExpect(header().doesNotExist("Retry-After"));
     }
 }
