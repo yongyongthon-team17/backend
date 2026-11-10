@@ -1,6 +1,7 @@
 package com.jigeumgayong.backend.analysis.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -25,6 +26,8 @@ import com.jigeumgayong.backend.facility.repository.FacilityRepository;
 import com.jigeumgayong.backend.facility.repository.FacilitySpaceRepository;
 import com.jigeumgayong.backend.facility.repository.FacilityTypeRepository;
 import com.jigeumgayong.backend.facility.repository.OperatingHourRepository;
+import com.jigeumgayong.backend.global.error.BusinessException;
+import com.jigeumgayong.backend.global.error.ErrorCode;
 import com.jigeumgayong.backend.global.response.Warning;
 import com.jigeumgayong.backend.support.FakeLlmClient;
 import com.jigeumgayong.backend.support.FakeLlmConfig;
@@ -81,10 +84,14 @@ class ImprovementAnalysisServiceTest {
         library = typeRepository.save(FacilityType.builder().name("도서관").chipGroup(ChipGroup.LIBRARY).build());
     }
 
+    /** 마지막으로 만든 시설. run()이 이 시설의 facilityId로 요청한다 */
+    Facility target;
+
     private Facility facility(AccessType access) {
-        return facilityRepository.save(Facility.builder().type(library).sourceType(SourceType.MANUAL)
+        target = facilityRepository.save(Facility.builder().type(library).sourceType(SourceType.MANUAL)
                 .sourceKey("k" + (seq++)).district("수지구").accessType(access).name("시설" + seq)
                 .address("용인시 수지구").latitude(new BigDecimal("37.3")).longitude(new BigDecimal("127.1")).build());
+        return target;
     }
 
     /** 화요일 09:00-18:00 DEFAULT 공간을 가진 시설 (19-21시에 닫혀 있음) */
@@ -102,7 +109,12 @@ class ImprovementAnalysisServiceTest {
     }
 
     private AnalysisResult run() {
-        return service.analyze(null, null, null, TUE, "19:00", "21:00");
+        return runFor(target.getFacilityId());
+    }
+
+    private AnalysisResult runFor(Object facilityId) {
+        return service.analyze(facilityId == null ? null : String.valueOf(facilityId), null, null, null, TUE,
+                "19:00", "21:00");
     }
 
     private static List<String> codes(AnalysisResult r) {
@@ -587,34 +599,131 @@ class ImprovementAnalysisServiceTest {
         }
     }
 
+    // --- facilityId ---
+
+    private static String errorField(BusinessException e) {
+        return e.getDetails().get(0).field();
+    }
+
     @Test
-    void 요청당_신규_생성은_10건까지이고_초과분은_다음_요청에서_이어서_생성한다() {
-        for (int i = 0; i < 12; i++) {
-            closedEvening(AccessType.OPEN_HOURS);
+    void 지정한_시설만_분석하고_다른_시설은_LLM을_호출하지_않는다() {
+        closedEvening(AccessType.OPEN_HOURS);
+        Facility lib = facility(AccessType.OPEN_HOURS);
+        spaceRepository.save(new FacilitySpace(lib.getFacilityId(), SpaceType.GENERAL, "종합자료실"));
+        spaceRepository.save(new FacilitySpace(lib.getFacilityId(), SpaceType.READING, "열람실"));
+        open(lib, SpaceType.GENERAL, 540, 1080);
+        open(lib, SpaceType.READING, 540, 1080);
+        closedEvening(AccessType.OPEN_HOURS);
+
+        AnalysisResult r = runFor(lib.getFacilityId());
+
+        // items는 공간별 배열: 도서관은 종합자료실·열람실 2개
+        assertThat(r.data().items()).extracting(ImprovementItem::spaceType).containsExactly("GENERAL", "READING");
+        assertThat(r.data().items()).allSatisfy(i -> assertThat(i.facility().facilityId())
+                .isEqualTo(String.valueOf(lib.getFacilityId())));
+        assertThat(r.data().facilityCount()).isEqualTo(1);
+        assertThat(llm.calls.get()).isEqualTo(2); // 그 시설의 불일치 공간 수
+        assertThat(aiRepository.count()).isEqualTo(2);
+    }
+
+    @Test
+    void facilityId를_지정하면_criteria의_district가_달라도_후보가_되고_criteria는_그대로_돌려준다() {
+        Facility f = closedEvening(AccessType.OPEN_HOURS); // 수지구
+
+        AnalysisResult r = service.analyze(String.valueOf(f.getFacilityId()), "없는이름", "기흥구", null, TUE,
+                "19:00", "21:00");
+
+        assertThat(r.data().items()).hasSize(1);
+        assertThat(r.data().criteria().district()).isEqualTo("기흥구");
+        assertThat(r.data().criteria().keyword()).isEqualTo("없는이름");
+    }
+
+    @Test
+    void facilityId_지정_요청을_다시_보내면_HIT이다() {
+        Facility f = closedEvening(AccessType.OPEN_HOURS);
+
+        ImprovementItem first = runFor(f.getFacilityId()).data().items().get(0);
+        ImprovementItem second = runFor(f.getFacilityId()).data().items().get(0);
+
+        assertThat(first.cache().status()).isEqualTo("CREATED");
+        assertThat(second.cache().status()).isEqualTo("HIT");
+        assertThat(second.suggestionId()).isEqualTo(first.suggestionId());
+        assertThat(llm.calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void facilityId가_ALWAYS_OPEN_시설이면_빈_items다() {
+        Facility f = facility(AccessType.ALWAYS_OPEN);
+        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+
+        AnalysisResult r = runFor(f.getFacilityId());
+
+        assertThat(r.data().items()).isEmpty();
+        assertThat(r.data().candidateCount()).isZero();
+        assertThat(llm.calls.get()).isZero();
+    }
+
+    @Test
+    void facilityId_시설에_불일치_공간이_없으면_빈_items다() {
+        Facility f = facility(AccessType.OPEN_HOURS);
+        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+        open(f, SpaceType.DEFAULT, 540, 1320);
+        closedEvening(AccessType.OPEN_HOURS); // 다른 시설은 불일치가 있어도 후보가 아니다
+
+        AnalysisResult r = runFor(f.getFacilityId());
+
+        assertThat(r.data().items()).isEmpty();
+        assertThat(llm.calls.get()).isZero();
+    }
+
+    @Test
+    void 없는_facilityId는_FACILITY_NOT_FOUND다() {
+        closedEvening(AccessType.OPEN_HOURS);
+
+        assertThatThrownBy(() -> runFor(999_999L))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.FACILITY_NOT_FOUND));
+        assertThat(llm.calls.get()).isZero();
+    }
+
+    @Test
+    void facilityId_형식이_틀리면_INVALID_REQUEST이고_field는_facilityId다() {
+        for (String bad : new String[] { "", "abc", "0", "-1", "01", " 1", "1.0", "9223372036854775808" }) {
+            assertThatThrownBy(() -> runFor(bad))
+                    .as(bad)
+                    .isInstanceOfSatisfying(BusinessException.class, e -> {
+                        assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
+                        assertThat(errorField(e)).isEqualTo("facilityId");
+                    });
         }
+        assertThat(llm.calls.get()).isZero();
+    }
 
-        AnalysisResult first = run();
-        List<ImprovementItem> items = first.data().items();
+    @Test
+    void facilityId가_null이면_INVALID_REQUEST_REQUIRED다() {
+        assertThatThrownBy(() -> runFor(null))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
+                    assertThat(errorField(e)).isEqualTo("facilityId");
+                    assertThat(e.getDetails().get(0).reason()).isEqualTo("REQUIRED");
+                });
+    }
 
-        assertThat(items).hasSize(12);
-        assertThat(items.subList(0, 10)).allSatisfy(i -> assertThat(i.cache().status()).isEqualTo("CREATED"));
-        // facilityId 순서상 뒤쪽 2건이 한도 초과
-        assertThat(items.subList(10, 12)).allSatisfy(i -> {
-            assertThat(i.proposalStatus()).isEqualTo("UNAVAILABLE");
-            assertThat(i.proposalReason()).isEqualTo("이번 요청의 생성 한도 초과");
-            assertThat(i.cache().status()).isEqualTo("UNAVAILABLE");
-        });
-        assertThat(llm.calls.get()).isEqualTo(10);
-        assertThat(codes(first)).contains("LLM_UNAVAILABLE");
-        assertThat(first.warnings()).filteredOn(w -> w.code().equals("LLM_UNAVAILABLE")).hasSize(2);
+    @Test
+    void facilityId_형식_오류가_criteria_오류보다_먼저다() {
+        assertThatThrownBy(() -> service.analyze("abc", null, null, null, 9, "19:00", "21:00"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(errorField(e)).isEqualTo("facilityId"));
+    }
 
-        AnalysisResult second = run();
+    @Test
+    void facilityId를_지정해도_criteria_값_오류는_400이다() {
+        Facility f = closedEvening(AccessType.OPEN_HOURS);
 
-        assertThat(second.data().items().subList(0, 10))
-                .allSatisfy(i -> assertThat(i.cache().status()).isEqualTo("HIT")); // HIT는 한도에서 제외
-        assertThat(second.data().items().subList(10, 12))
-                .allSatisfy(i -> assertThat(i.cache().status()).isEqualTo("CREATED"));
-        assertThat(llm.calls.get()).isEqualTo(12);
-        assertThat(aiRepository.count()).isEqualTo(12);
+        assertThatThrownBy(() -> service.analyze(String.valueOf(f.getFacilityId()), null, "없는구", null, TUE,
+                "19:00", "21:00"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST);
+                    assertThat(errorField(e)).isEqualTo("criteria.district");
+                });
     }
 }

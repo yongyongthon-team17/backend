@@ -24,6 +24,7 @@ import com.jigeumgayong.backend.facility.service.SearchCriteriaNormalizer;
 import com.jigeumgayong.backend.facility.service.SearchCriteriaNormalizer.Normalized;
 import com.jigeumgayong.backend.facility.service.TimeText;
 import com.jigeumgayong.backend.global.error.BusinessException;
+import com.jigeumgayong.backend.global.error.ErrorCode;
 import com.jigeumgayong.backend.global.error.ErrorDetail;
 import com.jigeumgayong.backend.global.response.Meta;
 import com.jigeumgayong.backend.global.response.Warning;
@@ -41,6 +42,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,7 +51,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 /**
- * A04 공간별 불일치 분석 및 AI 개선안.
+ * A04 공간별 불일치 분석 및 AI 개선안. 대상은 요청의 facilityId 한 시설의 공간(최대 3개)이다.
  * 흐름: 후보 계산 → 후보별 캐시 조회(HIT이면 LLM 미호출) → MISS 중 앞에서 N개만 LLM 생성(병렬)
  * → 검증 통과분만 저장 → 응답 조립. LLM·캐시 일부 실패는 200 부분 응답으로 처리한다.
  */
@@ -64,6 +66,7 @@ public class ImprovementAnalysisService {
     private static final String CREATED = "CREATED";
     private static final String NOT_STORED = "NOT_STORED";
     private static final String UNAVAILABLE = "UNAVAILABLE";
+    private static final Pattern POSITIVE_INT = Pattern.compile("^[1-9][0-9]*$");
 
     /** 컨트롤러가 ApiResponse로 감쌀 결과 */
     /** @param retryAfterSeconds AI 호출 한도에 걸린 항목이 있으면 다시 시도할 수 있기까지 남은 초(Retry-After 헤더용), 없으면 null */
@@ -137,16 +140,22 @@ public class ImprovementAnalysisService {
     }
 
     /** 요청자 식별 정보가 없는 호출(내부·테스트). AI 호출 한도는 익명 한 사람으로 센다. */
-    public AnalysisResult analyze(String keyword, String district, List<Integer> typeIds, int dayOfWeek,
-                                  String startText, String endText) {
-        return analyze(keyword, district, typeIds, dayOfWeek, startText, endText, ClientKey.ANONYMOUS);
+    public AnalysisResult analyze(String facilityIdText, String keyword, String district, List<Integer> typeIds,
+                                  int dayOfWeek, String startText, String endText) {
+        return analyze(facilityIdText, keyword, district, typeIds, dayOfWeek, startText, endText, ClientKey.ANONYMOUS);
     }
 
-    public AnalysisResult analyze(String keyword, String district, List<Integer> typeIds, int dayOfWeek,
-                                  String startText, String endText, ClientKey client) {
+    /**
+     * @param facilityIdText 필수. 후보는 이 시설의 공간뿐이다(keyword·district·typeIds는 후보 필터에 쓰지 않음).
+     *                       criteria 여섯 필드는 그대로 검증하고 정규화한 값을 응답 data.criteria로 돌려준다.
+     * @param client         AI 호출 한도를 셀 요청자(X-Client-Id·IP)
+     */
+    public AnalysisResult analyze(String facilityIdText, String keyword, String district, List<Integer> typeIds,
+                                  int dayOfWeek, String startText, String endText, ClientKey client) {
         long deadline = System.nanoTime() + props.requestDeadline().toNanos();
 
-        // 1) 요청 검증·정규화, 2) 후보 계산 (DB 실패는 503으로 전파)
+        // 1) 요청 검증·정규화(A03과 같은 순서: facilityId 형식 → 조건), 2) 후보 계산 (DB 실패는 503으로 전파)
+        long facilityId = parseFacilityId(facilityIdText);
         Normalized n;
         try {
             n = normalizer.normalize(keyword, district, typeIds, dayOfWeek, startText, endText);
@@ -155,7 +164,7 @@ public class ImprovementAnalysisService {
             throw new BusinessException(e.getErrorCode(), e.getMessage(), e.getDetails().stream()
                     .map(d -> new ErrorDetail("criteria." + d.field(), d.reason())).toList());
         }
-        CandidateResult found = finder.find(n, dayOfWeek);
+        CandidateResult found = finder.findForFacility(facilityId, n, dayOfWeek);
 
         Map<String, Warning> warnings = new LinkedHashMap<>();
         addWarning(warnings, Warning.of(WarningCode.WEEKLY_SCHEDULE_ONLY,
@@ -445,6 +454,29 @@ public class ImprovementAnalysisService {
 
     private static String rateLimitReason(long retryAfterSeconds) {
         return "AI 호출 한도를 초과했습니다. " + retryAfterSeconds + "초 후 다시 시도해 주세요.";
+    }
+
+    /**
+     * 필수이고, 10진수 양수 문자열이며 Long 범위 안이어야 한다(A03 parseFacilityId와 같은 규칙). 아니면 400 field=facilityId.
+     * 누락은 컨트롤러 @NotNull이 먼저 막고, 여기서는 서비스를 직접 부르는 경우를 대비한다.
+     */
+    private static long parseFacilityId(String text) {
+        if (text == null) {
+            throw invalidFacilityId(ErrorDetail.REQUIRED);
+        }
+        if (!POSITIVE_INT.matcher(text).matches()) {
+            throw invalidFacilityId(ErrorDetail.INVALID_FORMAT);
+        }
+        try {
+            return Long.parseLong(text);
+        } catch (NumberFormatException e) {
+            throw invalidFacilityId(ErrorDetail.OUT_OF_RANGE);
+        }
+    }
+
+    private static BusinessException invalidFacilityId(String reason) {
+        return new BusinessException(ErrorCode.INVALID_REQUEST, ErrorCode.INVALID_REQUEST.defaultMessage(),
+                List.of(new ErrorDetail("facilityId", reason)));
     }
 
     private static Warning llmWarning(Prepared p, String reason) {

@@ -11,6 +11,14 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.jigeumgayong.backend.facility.domain.AccessType;
+import com.jigeumgayong.backend.facility.domain.ChipGroup;
+import com.jigeumgayong.backend.facility.domain.Facility;
+import com.jigeumgayong.backend.facility.domain.FacilityType;
+import com.jigeumgayong.backend.facility.domain.SourceType;
+import com.jigeumgayong.backend.facility.repository.FacilityRepository;
+import com.jigeumgayong.backend.facility.repository.FacilityTypeRepository;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -38,6 +46,12 @@ class CorsIntegrationTest {
 
 	@Autowired
 	MockMvc mvc;
+
+	@Autowired
+	FacilityTypeRepository typeRepository;
+
+	@Autowired
+	FacilityRepository facilityRepository;
 
 	/** 500·503 오류 응답 확인용 테스트 전용 엔드포인트 */
 	@TestConfiguration
@@ -131,15 +145,24 @@ class CorsIntegrationTest {
 
 	@Test
 	void post_has_cors_headers() throws Exception {
-		// 일치하는 시설이 없는 키워드 → 후보 0건이라 LLM을 호출하지 않는다
-		mvc.perform(post("/api/v1/improvement-analyses").header("Origin", ALLOWED)
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{"criteria":{"keyword":"cors-no-match","dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}}
-								"""))
-				.andExpect(status().isOk())
-				.andExpect(header().string(ACAO, ALLOWED))
-				.andExpect(jsonPath("$.data.candidateCount").value(0));
+		// A04는 facilityId 필수. ALWAYS_OPEN 시설은 후보 0건이라 LLM을 호출하지 않는다
+		FacilityType type = typeRepository.save(FacilityType.builder().name("cors-type")
+				.chipGroup(ChipGroup.SPORTS).build());
+		Facility f = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
+				.sourceKey("cors-1").district("수지구").accessType(AccessType.ALWAYS_OPEN).name("cors 시설")
+				.address("주소").latitude(new BigDecimal("37.3")).longitude(new BigDecimal("127.1")).build());
+		try {
+			mvc.perform(post("/api/v1/improvement-analyses").header("Origin", ALLOWED)
+							.contentType(MediaType.APPLICATION_JSON)
+							.content("{\"facilityId\":\"" + f.getFacilityId()
+									+ "\",\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+					.andExpect(status().isOk())
+					.andExpect(header().string(ACAO, ALLOWED))
+					.andExpect(jsonPath("$.data.candidateCount").value(0));
+		} finally {
+			facilityRepository.delete(f);
+			typeRepository.delete(type);
+		}
 	}
 
 	// --- 오류 응답에도 헤더 ---

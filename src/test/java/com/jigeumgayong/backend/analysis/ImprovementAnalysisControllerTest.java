@@ -40,7 +40,7 @@ class ImprovementAnalysisControllerTest {
 
     static final String URL = "/api/v1/improvement-analyses";
     static final String BODY = """
-            {"criteria":{"keyword":null,"district":"수지구","facilityTypeIds":[1],
+            {"facilityId":"23","criteria":{"keyword":null,"district":"수지구","facilityTypeIds":[1],
              "dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}}""";
 
     ImprovementAnalysisService service = mock(ImprovementAnalysisService.class);
@@ -63,7 +63,7 @@ class ImprovementAnalysisControllerTest {
 
     @Test
     void 정상_요청은_200_공통_봉투다() throws Exception {
-        when(service.analyze(any(), eq("수지구"), eq(List.of(1)), eq(1), eq("19:00"), eq("21:00"), any()))
+        when(service.analyze(eq("23"), any(), eq("수지구"), eq(List.of(1)), eq(1), eq("19:00"), eq("21:00"), any()))
                 .thenReturn(empty());
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
@@ -95,14 +95,14 @@ class ImprovementAnalysisControllerTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"dayOfWeek\":\"월\",\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                        .content("{\"facilityId\":\"23\",\"criteria\":{\"dayOfWeek\":\"월\",\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
     }
 
     @Test
     void 서비스의_검증_오류는_공통_오류_형식으로_변환된다() throws Exception {
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+        when(service.analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), any()))
                 .thenThrow(new BusinessException(ErrorCode.INVALID_TIME_RANGE,
                         ErrorCode.INVALID_TIME_RANGE.defaultMessage(),
                         List.of(new ErrorDetail("endTime", "MUST_BE_AFTER_START_TIME"))));
@@ -129,19 +129,21 @@ class ImprovementAnalysisControllerTest {
     }
 
     @Test
-    void 선택_필드를_생략해도_서비스로_null이_전달된다() throws Exception {
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any())).thenReturn(empty());
+    void criteria_선택_필드를_생략하면_null로_facilityId는_그대로_전달된다() throws Exception {
+        when(service.analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(empty());
 
-        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content("""
+                        {"facilityId":"23","criteria":{"dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}}"""))
                 .andExpect(status().isOk());
 
-        verify(service).analyze(eq(null), eq(null), eq(null), eq(1), eq("19:00"), eq("21:00"), any());
+        verify(service).analyze(eq("23"), eq(null), eq(null), eq(null), eq(1), eq("19:00"), eq("21:00"), any());
     }
 
     @Test
     void X_Client_Id와_X_Real_IP가_한도_키로_서비스에_전달된다() throws Exception {
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any())).thenReturn(empty());
+        when(service.analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(empty());
         String id = "3F2504E0-4F89-41D3-9A0C-0305E82C3301";
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY)
@@ -149,7 +151,7 @@ class ImprovementAnalysisControllerTest {
                 .andExpect(status().isOk());
 
         ArgumentCaptor<ClientKey> key = ArgumentCaptor.forClass(ClientKey.class);
-        verify(service).analyze(any(), any(), any(), anyInt(), anyString(), anyString(), key.capture());
+        verify(service).analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), key.capture());
         assertThat(key.getValue().clientId()).isEqualTo(id.toLowerCase());
         assertThat(key.getValue().ip()).isEqualTo("198.51.100.7"); // MockMvc의 원격 주소는 루프백
     }
@@ -157,7 +159,7 @@ class ImprovementAnalysisControllerTest {
     @Test
     void 한도에_걸린_항목이_있으면_Retry_After_헤더를_준다() throws Exception {
         AnalysisResult base = empty();
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+        when(service.analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), any()))
                 .thenReturn(new AnalysisResult(base.data(), base.warnings(), 42L));
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
@@ -167,10 +169,37 @@ class ImprovementAnalysisControllerTest {
 
     @Test
     void 한도에_걸리지_않으면_Retry_After_헤더가_없다() throws Exception {
-        when(service.analyze(any(), any(), any(), anyInt(), anyString(), anyString(), any())).thenReturn(empty());
+        when(service.analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(empty());
 
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
                 .andExpect(status().isOk())
                 .andExpect(header().doesNotExist("Retry-After"));
+    }
+
+    @Test
+    void facilityId가_없거나_null이면_400_REQUIRED이고_서비스를_호출하지_않는다() throws Exception {
+        for (String body : new String[] {
+                "{\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}",
+                "{\"facilityId\":null,\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}" }) {
+            mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.error.details[0].field").value("facilityId"))
+                    .andExpect(jsonPath("$.error.details[0].reason").value("REQUIRED"));
+        }
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void JSON_숫자_facilityId도_문자열로_받아들인다() throws Exception {
+        when(service.analyze(any(), any(), any(), any(), anyInt(), anyString(), anyString(), any()))
+                .thenReturn(empty());
+
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content("""
+                        {"facilityId":23,"criteria":{"dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}}"""))
+                .andExpect(status().isOk());
+
+        verify(service).analyze(eq("23"), eq(null), eq(null), eq(null), eq(1), eq("19:00"), eq("21:00"), any());
     }
 }

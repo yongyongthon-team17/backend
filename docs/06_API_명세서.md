@@ -369,25 +369,52 @@ Accept: application/json
 
 - `POST /api/v1/improvement-analyses`
 - Headers: `Content-Type: application/json`, `Accept: application/json`. 인증: 추가 논의 필요.
-- 요청 Body: criteria 객체 필수, 내부는 Criteria(A02 Query와 같은 여섯 필드).
+- 선택 헤더 `X-Client-Id`: 브라우저별 UUID(`crypto.randomUUID()`를 localStorage에 저장해 재사용). AI 호출 한도의 개인 키로 쓴다. 없거나 UUID 형식이 아니면 무시하고 IP를 개인 키로 쓴다. 응답·DB·로그에 남기지 않는다. [구현]
+- 요청 Body: facilityId(최상위)와 criteria 객체 모두 필수. criteria 내부는 Criteria(A02 Query와 같은 여섯 필드). [구현]
 - 동기 처리 후 200. 캐시 행을 새로 만들어도 201로 구분하지 않는다.
+- FE는 시설 상세 패널(FacilityDetailDrawer → AiRecommendation)에서 버튼을 눌렀을 때만 호출한다.
 
 ```json
-{ "criteria": { "keyword": null, "district": "수지구", "facilityTypeIds": [1], "dayOfWeek": 1, "startTime": "19:00", "endTime": "21:00" } }
+{ "facilityId": "23", "criteria": { "keyword": null, "district": "수지구", "facilityTypeIds": [1], "dayOfWeek": 1, "startTime": "19:00", "endTime": "21:00" } }
 ```
 
-#### 분석 대상
+#### 요청 Body 필드
 
-같은 키워드·지역·유형 후보에서 공간별 UNAVAILABLE 항목을 다시 찾는다(A02 결과를 입력받지 않음).
+| 필드 | 타입 | 필수 | null | 설명 |
+|---|---|---|---|---|
+| facilityId | string | 예 | 아니오 | 분석할 시설. 10진수 양수 문자열(BIGINT). 누락·null이면 400 (details[].field `facilityId`, reason `REQUIRED`) [구현] |
+| criteria | Criteria | 예 | 아니오 | A02 Query와 같은 여섯 필드 |
 
+#### 분석 대상 [구현]
+
+facilityId 시설의 공간 중 희망 시간에 UNAVAILABLE인 공간을 찾는다(A02 결과를 입력받지 않음).
+
+- criteria 여섯 필드는 모두 검증하고(없는 district·typeId 등은 400) 정규화한 값을 data.criteria로 돌려준다. 후보 필터에는 dayOfWeek·startTime·endTime만 쓰고 keyword·district·facilityTypeIds는 쓰지 않는다.
+- 검증 순서: facilityId 누락·형식 → criteria → 시설 조회(없으면 404 FACILITY_NOT_FOUND, A03과 같음).
 - OPEN_HOURS: 공간별 분석.
 - RESERVATION: 운영시간 불일치만 분석하고 예약 가능성은 판단하지 않는다. 제안에 ‘예약’을 명시하고 limitations에 1개 추가.
-- ALWAYS_OPEN: 후보에서 제외.
-- UNKNOWN: 제외하고 unknownSpaceCount로 알리며 UNKNOWN_HOURS_EXCLUDED 경고. [구현]
-- 같은 시설에 대상 공간이 여러 개면 items도 여러 개. `facilityId + spaceType`으로 구별.
-- 후보 순서는 facilityId 오름차순, 공간은 GENERAL → READING → DEFAULT. [구현]
-- 한 요청에서 새로 생성하는 건수는 최대 10건(설정값, 캐시 HIT는 제외). 초과분은 proposalStatus=UNAVAILABLE, proposalReason "이번 요청의 생성 한도 초과". 같은 요청을 다시 보내면 생성된 항목은 HIT, 남은 항목이 이어서 생성된다. [구현]
-- LLM 호출당 20초, 요청 전체 30초 제한. 전체 시간을 넘으면 남은 항목은 UNAVAILABLE. [구현]
+- ALWAYS_OPEN: 분석 대상이 아니다. 200, `candidateCount: 0`, `items: []`.
+- UNKNOWN: 제외하고 unknownSpaceCount로 알리며 UNKNOWN_HOURS_EXCLUDED 경고.
+- items는 공간별 배열이다. 한 시설에 대상 공간이 여러 개면 items도 여러 개이고 `spaceType`으로 구별한다. 순서는 GENERAL → READING → DEFAULT.
+  - FE 안내: 도서관은 종합자료실·열람실 2개가 올 수 있다. 시설 하나의 공간은 최대 3개다.
+- 한 요청의 새 생성 한도(설정값 10건, 캐시 HIT 제외)는 코드에 남아 있지만, 시설 하나의 공간이 최대 3개라 현재 구조에서는 걸리지 않는다. 따라서 proposalReason "이번 요청의 생성 한도 초과"는 현재 구조에서는 발생하지 않음.
+- LLM 호출당 20초, 요청 전체 30초 제한. 전체 시간을 넘으면 남은 항목은 UNAVAILABLE. 항목당 LLM 호출은 1번이며 재시도하지 않는다.
+
+#### AI 호출 한도 [구현]
+
+OpenAI 크레딧 소진을 막기 위한 서버 메모리 기반 한도다(PR #16).
+
+| 구분 | 키 | 3분 슬라이딩 윈도우 한도(기본값) |
+|---|---|---|
+| 개인 | `X-Client-Id`(UUID). 없거나 형식이 틀리면 IP | 10건 |
+| IP | 요청자 IP. nginx(루프백) 뒤에서는 `X-Real-IP`만 신뢰하고 `X-Forwarded-For`는 읽지 않음. IPv6는 /64 단위 | 150건 |
+| 서버 전체 | - | 150건 |
+
+- 세는 대상은 OpenAI를 **실제로 호출한 횟수**다. 캐시 HIT는 세지 않고, 호출이 실패해도 1건 소모한다. 세 한도를 모두 통과할 때만 소모한다.
+- 한도를 넘어도 응답은 **200**이다. 한도에 걸린 항목만 `proposalStatus: "UNAVAILABLE"`, `cache.status: "UNAVAILABLE"`이고 proposalReason은 "AI 호출 한도를 초과했습니다. N초 후 다시 시도해 주세요."이다. 같은 요청의 HIT 항목은 정상 반환한다.
+- 이때 meta.warnings에 `RATE_LIMITED`(facilityId 포함)를 넣고, 응답 헤더 `Retry-After`(초)에 다시 시도할 수 있기까지 남은 시간을 준다. 한도에 걸린 항목이 없으면 `Retry-After`를 보내지 않는다.
+- 값은 설정(`app.llm.rate-limit.*`, 환경 변수 `APP_LLM_RATE_LIMIT_ENABLED`·`_PER_CLIENT`·`_PER_IP`·`_GLOBAL`)으로 바꿀 수 있다. 서버를 재시작하면 기록이 초기화된다.
+- 07 §3.5의 429 RATE_LIMIT_EXCEEDED와 달리 A04는 부분 응답을 유지하려고 429를 쓰지 않는다.
 
 #### 캐시 처리 순서 [B03 + 구현]
 
@@ -407,7 +434,7 @@ selectedSchedule·availability·transport처럼 매번 계산되는 값은 저�
 |---|---|---|---|---|
 | data.criteria | Criteria | 예 | 아니오 | 정규화한 여섯 조건 |
 | data.candidateCount | integer | 예 | 아니오 | items.length |
-| data.facilityCount | integer | 예 | 아니오 | items 내 서로 다른 facilityId 수 |
+| data.facilityCount | integer | 예 | 아니오 | items 내 서로 다른 facilityId 수. 시설 하나만 분석하므로 0 또는 1 [구현] |
 | data.unknownSpaceCount | integer | 예 | 아니오 | 시간 미확인으로 제외한 공간 수 |
 | data.items | ImprovementItem[] | 예 | 아니오 | 공간별 제안 |
 | data.disclaimer | string | 예 | 아니오 | AI 의견은 참고용이라는 안내 |
@@ -424,7 +451,7 @@ selectedSchedule·availability·transport처럼 매번 계산되는 값은 저�
 | currentClosingTime | string(time) | 예 | 예 | 선택 요일 마지막 구간의 closeTime. CLOSED면 null |
 | proposedClosingTime | string(time) | 예 | 예 | 제안 종료. 종료 연장으로 해결 못하면 null |
 | proposalStatus | string(enum) | 예 | 아니오 | GENERATED / UNAVAILABLE |
-| proposalReason | string | 예 | 예 | 서버가 사실로 만든 고정 문장. 실패 시 "AI 제안을 생성하지 못했습니다." 또는 "이번 요청의 생성 한도 초과" |
+| proposalReason | string | 예 | 예 | 서버가 사실로 만든 고정 문장. 실패 시 "AI 제안을 생성하지 못했습니다." ("이번 요청의 생성 한도 초과"는 코드에 남아 있으나 현재 구조에서는 발생하지 않음) [구현] |
 | alternatives | string[] | 예 | 아니오 | 운영 대안. 실패면 [] |
 | integratedSuggestion | IntegratedSuggestion | 예 | 아니오 | 운영·교통 종합 제안 |
 | transport | TransportAccessibility | 예 | 아니오 | A05와 같은 타입 |
@@ -549,14 +576,16 @@ facility/spaceType/selectedSchedule/availability/transport는 유지하고 meta.
 
 #### 경고 코드 (A04에서 나올 수 있는 것) [구현]
 
-WEEKLY_SCHEDULE_ONLY(항상), UNKNOWN_HOURS_EXCLUDED, LLM_UNAVAILABLE, CACHE_READ_FAILED, CACHE_WRITE_FAILED, CACHE_INVALIDATED, TRANSPORT_DATA_UNAVAILABLE(transport NO_DATA, 시설당 1건), GRADE_RULE_NOT_DEFINED(transport AVAILABLE, 시설당 1건). 모두 07 §3.4 목록 안의 코드다.
+WEEKLY_SCHEDULE_ONLY(항상), UNKNOWN_HOURS_EXCLUDED, LLM_UNAVAILABLE, RATE_LIMITED(AI 호출 한도 초과 항목, 시설당 1건), CACHE_READ_FAILED, CACHE_WRITE_FAILED, CACHE_INVALIDATED, TRANSPORT_DATA_UNAVAILABLE(transport NO_DATA, 시설당 1건), GRADE_RULE_NOT_DEFINED(transport AVAILABLE, 시설당 1건). RATE_LIMITED를 뺀 나머지는 07 §3.4 목록 안의 코드다. RATE_LIMITED는 PR #16에서 추가했고 07 반영은 후속 작업이다.
 
 #### 상태코드
 
 | HTTP | code | 처리 |
 |---|---|---|
-| 200 | - | 캐시 HIT / 새 생성 / 후보 없음 / LLM·캐시 일부 실패 |
+| 200 | - | 캐시 HIT / 새 생성 / 후보 없음 / LLM·캐시 일부 실패 / AI 호출 한도 초과(해당 항목 UNAVAILABLE, `Retry-After` 헤더) |
 | 400 | INVALID_REQUEST / INVALID_TIME_RANGE | JSON·조건 오류. details[].field는 `criteria.dayOfWeek`처럼 `criteria.` 접두사 [구현] |
+| 400 | INVALID_REQUEST | facilityId 누락·null은 reason REQUIRED, 형식 오류(빈 문자열·숫자 아님·0 이하)는 INVALID_FORMAT, Long 범위 초과는 OUT_OF_RANGE. details[].field는 `facilityId`(접두사 없음) [구현] |
+| 404 | FACILITY_NOT_FOUND | facilityId 시설이 없음 (A03과 같음) [구현] |
 | 415 | UNSUPPORTED_MEDIA_TYPE | JSON 본문 필요 |
 | 503 | DATA_UNAVAILABLE | 시설 DB 조회 불가 |
 

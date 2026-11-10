@@ -48,6 +48,8 @@ class ImprovementAnalysisNoKeyIntegrationTest {
     @Autowired OperatingHourRepository hourRepository;
     @Autowired FacilityAmenityRepository amenityRepository;
 
+    Facility f;
+
     @BeforeEach
     void setUp() {
         aiRepository.deleteAll();
@@ -57,7 +59,7 @@ class ImprovementAnalysisNoKeyIntegrationTest {
         facilityRepository.deleteAll();
         typeRepository.deleteAll();
         FacilityType type = typeRepository.save(FacilityType.builder().name("도서관").chipGroup(ChipGroup.LIBRARY).build());
-        Facility f = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
+        f = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
                 .sourceKey("nokey").district("수지구").accessType(AccessType.OPEN_HOURS).name("시설").address("주소")
                 .latitude(new BigDecimal("37.32")).longitude(new BigDecimal("127.1")).build());
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
@@ -71,7 +73,8 @@ class ImprovementAnalysisNoKeyIntegrationTest {
         assertThat(llmClient).isInstanceOf(OpenAiLlmClient.class);
 
         mvc.perform(post("/api/v1/improvement-analyses").contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                        .content("{\"facilityId\":\"" + f.getFacilityId()
+                                + "\",\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.candidateCount").value(1))
                 .andExpect(jsonPath("$.data.items[0].proposalStatus").value("UNAVAILABLE"))

@@ -53,23 +53,27 @@ class ImprovementAnalysisDeadlineTest {
         facilityRepository.deleteAll();
         typeRepository.deleteAll();
         FacilityType type = typeRepository.save(FacilityType.builder().name("도서관").chipGroup(ChipGroup.LIBRARY).build());
-        for (int i = 0; i < 3; i++) {
-            Facility f = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
-                    .sourceKey("dl" + i).district("수지구").accessType(AccessType.OPEN_HOURS).name("시설" + i)
-                    .address("주소").latitude(new BigDecimal("37.32")).longitude(new BigDecimal("127.1")).build());
-            spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
-            hourRepository.save(OperatingHour.builder().facilityId(f.getFacilityId()).spaceType(SpaceType.DEFAULT)
+        // 한 시설의 공간 3개(시설 하나가 가질 수 있는 최대)가 모두 19-21시에 닫혀 있다
+        facility = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
+                .sourceKey("dl").district("수지구").accessType(AccessType.OPEN_HOURS).name("시설")
+                .address("주소").latitude(new BigDecimal("37.32")).longitude(new BigDecimal("127.1")).build());
+        for (SpaceType t : SpaceType.values()) {
+            spaceRepository.save(new FacilitySpace(facility.getFacilityId(), t, t.name()));
+            hourRepository.save(OperatingHour.builder().facilityId(facility.getFacilityId()).spaceType(t)
                     .dayOfWeek((short) 1).intervalSeq((short) 1).dayState(DayState.OPEN)
                     .openMin((short) 540).closeMin((short) 1080).build());
         }
     }
+
+    Facility facility;
 
     @Test
     void 전체_제한_시간을_넘으면_남은_항목은_UNAVAILABLE이고_응답이_지연되지_않는다() {
         llm.delayMillis = 3000; // 풀 크기 1 → 항목마다 3초, 전체 제한은 1초
 
         long start = System.nanoTime();
-        AnalysisResult r = service.analyze(null, null, null, 1, "19:00", "21:00");
+        AnalysisResult r = service.analyze(String.valueOf(facility.getFacilityId()), null, null, null, 1,
+                "19:00", "21:00");
         long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
 
         assertThat(elapsedMillis).isLessThan(2500);
