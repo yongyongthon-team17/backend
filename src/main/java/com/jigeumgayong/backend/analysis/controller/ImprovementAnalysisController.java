@@ -30,7 +30,7 @@ public class ImprovementAnalysisController {
                                                             HttpServletRequest http, HttpServletResponse response) {
         CriteriaRequest c = request.criteria();
         // X-Client-Id(UUID)와 IP로 AI 호출 한도를 센다. 식별 정보는 서비스 안에서만 쓰고 응답에 싣지 않는다.
-        AnalysisResult result = service.analyze(c.keyword(), c.district(), c.facilityTypeIds(),
+        AnalysisResult result = service.analyze(request.facilityId(), c.keyword(), c.district(), c.facilityTypeIds(),
                 c.dayOfWeek(), c.startTime(), c.endTime(), ClientKeyResolver.resolve(http));
         if (result.retryAfterSeconds() != null) {
             response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(result.retryAfterSeconds()));

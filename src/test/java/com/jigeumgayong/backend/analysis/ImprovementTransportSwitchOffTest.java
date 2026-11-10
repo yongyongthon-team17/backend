@@ -67,7 +67,8 @@ class ImprovementTransportSwitchOffTest {
             return FakeLlmClient.validResponse(facts);
         };
 
-        ImprovementItem item = service.analyze(null, null, null, 1, "19:00", "21:00").data().items().get(0);
+        ImprovementItem item = service.analyze(String.valueOf(f.getFacilityId()), null, null, null, 1,
+                "19:00", "21:00").data().items().get(0);
 
         assertThat(item.transport().status().name()).isEqualTo("NOT_ENABLED");
         assertThat(item.transport().stopCount()).isNull();
@@ -75,7 +76,8 @@ class ImprovementTransportSwitchOffTest {
         assertThat(item.integratedSuggestion().status()).isEqualTo("PARTIAL");
         assertThat(inputs.get(0)).doesNotContain("busStop");
 
-        ImprovementItem hit = service.analyze(null, null, null, 1, "19:00", "21:00").data().items().get(0);
+        ImprovementItem hit = service.analyze(String.valueOf(f.getFacilityId()), null, null, null, 1,
+                "19:00", "21:00").data().items().get(0);
         assertThat(hit.cache().status()).isEqualTo("HIT");
         assertThat(hit.integratedSuggestion().status()).isEqualTo("PARTIAL");
     }

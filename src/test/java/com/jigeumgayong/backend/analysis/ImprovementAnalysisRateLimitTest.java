@@ -79,20 +79,30 @@ class ImprovementAnalysisRateLimitTest {
         return new ClientKey(UUID.randomUUID().toString(), "10.0.0." + IP_SEQ.incrementAndGet());
     }
 
-    /** 화요일 09:00-18:00 운영(저녁에 닫힘) 시설 */
-    private Facility closedEvening() {
-        Facility f = facilityRepository.save(Facility.builder().type(library).sourceType(SourceType.MANUAL)
+    /** 마지막으로 만든 시설. run()이 이 시설의 facilityId로 요청한다(A04는 facilityId 필수) */
+    Facility target;
+
+    /** 화요일 09:00-closeMin 운영하는 공간들을 가진 시설 */
+    private Facility facility(int closeMin, SpaceType... spaces) {
+        target = facilityRepository.save(Facility.builder().type(library).sourceType(SourceType.MANUAL)
                 .sourceKey("k" + (seq++)).district("수지구").accessType(AccessType.OPEN_HOURS).name("시설" + seq)
                 .address("용인시 수지구").latitude(new BigDecimal("37.3")).longitude(new BigDecimal("127.1")).build());
-        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
-        hourRepository.save(OperatingHour.builder().facilityId(f.getFacilityId()).spaceType(SpaceType.DEFAULT)
-                .dayOfWeek((short) TUE).intervalSeq((short) 1).dayState(DayState.OPEN)
-                .openMin((short) 540).closeMin((short) 1080).build());
-        return f;
+        for (SpaceType t : spaces) {
+            spaceRepository.save(new FacilitySpace(target.getFacilityId(), t, t.name()));
+            hourRepository.save(OperatingHour.builder().facilityId(target.getFacilityId()).spaceType(t)
+                    .dayOfWeek((short) TUE).intervalSeq((short) 1).dayState(DayState.OPEN)
+                    .openMin((short) 540).closeMin((short) closeMin).build());
+        }
+        return target;
+    }
+
+    /** 화요일 09:00-18:00 운영(저녁에 닫힘) 시설 */
+    private Facility closedEvening() {
+        return facility(1080, SpaceType.DEFAULT);
     }
 
     private AnalysisResult run(ClientKey who, String start, String end) {
-        return service.analyze(null, null, null, TUE, start, end, who);
+        return service.analyze(String.valueOf(target.getFacilityId()), null, null, null, TUE, start, end, who);
     }
 
     private static List<String> codes(AnalysisResult r) {
@@ -101,9 +111,7 @@ class ImprovementAnalysisRateLimitTest {
 
     @Test
     void 한도_안에서는_모두_생성하고_초과한_항목만_RATE_LIMITED로_응답한다() {
-        closedEvening();
-        closedEvening();
-        closedEvening(); // 후보 3개, 한도 2건
+        facility(1080, SpaceType.values()); // 한 시설의 공간 3개가 모두 후보, 한도 2건
         ClientKey me = newPerson();
 
         AnalysisResult r = run(me, "19:00", "21:00");
@@ -173,6 +181,8 @@ class ImprovementAnalysisRateLimitTest {
 
     @Test
     void 후보가_없거나_한도_미만이면_Retry_After_정보가_없다() {
+        facility(1320, SpaceType.DEFAULT); // 22시까지 운영 → 19-21시 후보 없음
+
         AnalysisResult none = run(newPerson(), "19:00", "21:00");
 
         assertThat(none.data().items()).isEmpty();

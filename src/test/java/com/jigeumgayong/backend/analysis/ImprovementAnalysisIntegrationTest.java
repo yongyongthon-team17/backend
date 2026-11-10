@@ -39,8 +39,8 @@ import org.springframework.test.web.servlet.MockMvc;
 class ImprovementAnalysisIntegrationTest {
 
     static final String URL = "/api/v1/improvement-analyses";
-    static final String BODY = """
-            {"criteria":{"district":"수지구","dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}}""";
+    static final String CRITERIA = """
+            {"district":"수지구","dayOfWeek":1,"startTime":"19:00","endTime":"21:00"}""";
 
     @Autowired MockMvc mvc;
     @Autowired FakeLlmClient llm;
@@ -76,7 +76,7 @@ class ImprovementAnalysisIntegrationTest {
 
     @Test
     void CREATED_다음_HIT_json_계약() throws Exception {
-        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(req(CRITERIA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.criteria.keyword").value((Object) null))
                 .andExpect(jsonPath("$.data.criteria.facilityTypeIds").isEmpty())
@@ -109,7 +109,7 @@ class ImprovementAnalysisIntegrationTest {
                 .andExpect(jsonPath("$.data.disclaimer").isString())
                 .andExpect(jsonPath("$.meta.warnings[0].code").value("WEEKLY_SCHEDULE_ONLY"));
 
-        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(req(CRITERIA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.items[0].cache.status").value("HIT"));
 
@@ -121,7 +121,7 @@ class ImprovementAnalysisIntegrationTest {
     void LLM이_실패해도_200이고_후보_정보는_유지된다() throws Exception {
         llm.fail = true;
 
-        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(BODY))
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(req(CRITERIA)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.candidateCount").value(1))
                 .andExpect(jsonPath("$.data.items[0].proposalStatus").value("UNAVAILABLE"))
@@ -140,8 +140,7 @@ class ImprovementAnalysisIntegrationTest {
     @Test
     void 후보_0건이면_빈_items와_함께_200이다() throws Exception {
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"district\":\"처인구\",\"dayOfWeek\":1,"
-                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                        .content(req("{\"dayOfWeek\":1,\"startTime\":\"10:00\",\"endTime\":\"12:00\"}")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.candidateCount").value(0))
                 .andExpect(jsonPath("$.data.facilityCount").value(0))
@@ -152,32 +151,82 @@ class ImprovementAnalysisIntegrationTest {
     @Test
     void 오류는_공통_봉투를_쓴다() throws Exception {
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"21:00\",\"endTime\":\"19:00\"}}"))
+                        .content(req("{\"dayOfWeek\":1,\"startTime\":\"21:00\",\"endTime\":\"19:00\"}")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_TIME_RANGE"))
                 .andExpect(jsonPath("$.error.details[0].field").value("criteria.endTime"));
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"dayOfWeek\":7,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                        .content(req("{\"dayOfWeek\":7,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.error.details[0].field").value("criteria.dayOfWeek"));
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"dayOfWeek\":1,\"endTime\":\"21:00\"}}"))
+                        .content(req("{\"dayOfWeek\":1,\"endTime\":\"21:00\"}")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details[?(@.field=='criteria.startTime')]").isNotEmpty());
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"facilityTypeIds\":[9999],\"dayOfWeek\":1,"
-                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                        .content(req("{\"facilityTypeIds\":[9999],\"dayOfWeek\":1,"
+                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.details[0].field").value("criteria.facilityTypeIds"));
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"criteria\":{\"district\":\"서울\",\"dayOfWeek\":1,"
-                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
+                        .content(req("{\"district\":\"서울\",\"dayOfWeek\":1,"
+                                + "\"startTime\":\"19:00\",\"endTime\":\"21:00\"}")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"));
-        mvc.perform(post(URL).contentType(MediaType.TEXT_PLAIN).content(BODY))
+        mvc.perform(post(URL).contentType(MediaType.TEXT_PLAIN).content(req(CRITERIA)))
                 .andExpect(status().isUnsupportedMediaType())
                 .andExpect(jsonPath("$.error.code").value("UNSUPPORTED_MEDIA_TYPE"));
+        assertThat(llm.calls.get()).isZero();
+    }
+
+    /** 이 테스트 시설의 facilityId를 넣은 요청 본문 */
+    private String req(String criteriaJson) {
+        return "{\"facilityId\":\"" + facility.getFacilityId() + "\",\"criteria\":" + criteriaJson + "}";
+    }
+
+    private static String bodyWithFacilityId(String facilityIdJson) {
+        return "{\"facilityId\":" + facilityIdJson
+                + ",\"criteria\":{\"district\":\"기흥구\",\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}";
+    }
+
+    @Test
+    void facilityId가_없거나_null이면_400_REQUIRED다() throws Exception {
+        for (String body : new String[] { "{\"criteria\":" + CRITERIA + "}", bodyWithFacilityId("null") }) {
+            mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.error.details[0].field").value("facilityId"))
+                    .andExpect(jsonPath("$.error.details[0].reason").value("REQUIRED"))
+                    .andExpect(jsonPath("$.error.requestId").isString());
+        }
+        assertThat(llm.calls.get()).isZero();
+    }
+
+    @Test
+    void criteria_district가_시설과_달라도_그_시설을_분석한다() throws Exception {
+        // criteria.district(기흥구)는 시설(수지구)과 달라도 후보 필터에 쓰지 않고, 응답 criteria에는 그대로 돌려준다
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyWithFacilityId("\"" + facility.getFacilityId() + "\"")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.criteria.district").value("기흥구"))
+                .andExpect(jsonPath("$.data.candidateCount").value(1))
+                .andExpect(jsonPath("$.data.items[0].facility.facilityId").value(String.valueOf(facility.getFacilityId())))
+                .andExpect(jsonPath("$.data.items[0].cache.status").value("CREATED"));
+    }
+
+    @Test
+    void facilityId_형식_오류는_400_없는_시설은_404다() throws Exception {
+        for (String bad : new String[] { "\"abc\"", "\"\"", "\"9223372036854775808\"" }) {
+            mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(bodyWithFacilityId(bad)))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.error.details[0].field").value("facilityId"));
+        }
+        mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON).content(bodyWithFacilityId("\"999999\"")))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("FACILITY_NOT_FOUND"))
+                .andExpect(jsonPath("$.error.requestId").isString());
         assertThat(llm.calls.get()).isZero();
     }
 }

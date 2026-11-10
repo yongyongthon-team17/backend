@@ -4,8 +4,12 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import java.util.List;
 
-/** A04 요청 Body (06 A04, 07 3.6). 시간은 24:00을 표현하려고 문자열로 받아 서비스에서 파싱한다. */
-public record ImprovementAnalysisRequest(@NotNull @Valid CriteriaRequest criteria) {
+/**
+ * A04 요청 Body (06 A04, 07 3.6). 시간은 24:00을 표현하려고 문자열로 받아 서비스에서 파싱한다.
+ *
+ * @param facilityId 필수. 10진수 문자열. 후보는 이 시설의 공간뿐이다(형식 검증은 서비스에서)
+ */
+public record ImprovementAnalysisRequest(@NotNull String facilityId, @NotNull @Valid CriteriaRequest criteria) {
 
     public record CriteriaRequest(String keyword, String district, List<Integer> facilityTypeIds,
                                   @NotNull Integer dayOfWeek, @NotNull String startTime, @NotNull String endTime) {

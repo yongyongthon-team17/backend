@@ -96,7 +96,8 @@ class ImprovementAnalysisPostgresTest {
     }
 
     private AnalysisResult run() {
-        return service.analyze(null, null, null, 1, "19:00", "21:00");
+        return service.analyze(String.valueOf(facility.getFacilityId()), null, null, null, 1,
+                "19:00", "21:00");
     }
 
     @Test

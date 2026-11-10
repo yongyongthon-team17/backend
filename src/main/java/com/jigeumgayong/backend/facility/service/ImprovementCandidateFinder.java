@@ -13,6 +13,8 @@ import com.jigeumgayong.backend.facility.repository.FacilitySpaceRepository;
 import com.jigeumgayong.backend.facility.repository.OperatingHourRepository;
 import com.jigeumgayong.backend.facility.service.SearchCriteriaNormalizer.Normalized;
 import com.jigeumgayong.backend.facility.service.TimeCoverage.Span;
+import com.jigeumgayong.backend.global.error.BusinessException;
+import com.jigeumgayong.backend.global.error.ErrorCode;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -23,9 +25,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * A04 후보 계산: 희망 시간에 닫혀 있는(UNAVAILABLE) 공간을 시설×공간 단위로 찾는다.
- * A02와 같은 3쿼리 + OperatingHours/TimeCoverage 판정을 재사용한다.
- * 결과 순서는 facilityId 오름차순, 공간은 GENERAL → READING → DEFAULT로 고정(반복 요청 시 같은 순서 보장).
+ * A04 후보 계산: 지정한 시설에서 희망 시간에 닫혀 있는(UNAVAILABLE) 공간을 찾는다.
+ * A02와 같은 OperatingHours/TimeCoverage 판정을 재사용한다.
+ * 공간 순서는 GENERAL → READING → DEFAULT로 고정(반복 요청 시 같은 순서 보장).
  */
 @Service
 @RequiredArgsConstructor
@@ -50,12 +52,19 @@ public class ImprovementCandidateFinder {
     private final FacilitySpaceRepository spaceRepository;
     private final OperatingHourRepository hourRepository;
 
+    /**
+     * 요청 facilityId 한 시설의 후보 계산. criteria 중 keyword·district·typeIds는 쓰지 않고 요일·시간만 쓴다.
+     * 시설이 없으면 404 FACILITY_NOT_FOUND (A03과 같은 방식).
+     */
     @Transactional(readOnly = true)
-    public CandidateResult find(Normalized n, int dayOfWeek) {
-        List<Facility> facilities = facilityRepository.search(
-                n.criteria().district() == null, n.criteria().district() == null ? "" : n.criteria().district(),
-                n.typeIds().isEmpty(), n.typeIds().isEmpty() ? List.of((short) -1) : n.typeIds(),
-                n.keywordPattern());
+    public CandidateResult findForFacility(long facilityId, Normalized n, int dayOfWeek) {
+        Facility f = facilityRepository.findDetailById(facilityId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.FACILITY_NOT_FOUND,
+                        ErrorCode.FACILITY_NOT_FOUND.defaultMessage(), List.of()));
+        return candidatesOf(List.of(f), n, dayOfWeek);
+    }
+
+    private CandidateResult candidatesOf(List<Facility> facilities, Normalized n, int dayOfWeek) {
         if (facilities.isEmpty()) {
             return new CandidateResult(List.of(), 0);
         }
