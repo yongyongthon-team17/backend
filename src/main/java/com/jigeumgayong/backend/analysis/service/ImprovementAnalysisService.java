@@ -12,6 +12,9 @@ import com.jigeumgayong.backend.transport.dto.TransportAccessibilityResponse.Sta
 import com.jigeumgayong.backend.analysis.dto.ImprovementAnalysisResponse.WeakTimeAnalysis;
 import com.jigeumgayong.backend.analysis.llm.LlmClient;
 import com.jigeumgayong.backend.analysis.llm.LlmProperties;
+import com.jigeumgayong.backend.analysis.ratelimit.ClientKey;
+import com.jigeumgayong.backend.analysis.ratelimit.LlmRateLimiter;
+import com.jigeumgayong.backend.analysis.ratelimit.LlmRateLimiter.Decision;
 import com.jigeumgayong.backend.analysis.service.ImprovementPrompt.Facts;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.Coordinates;
 import com.jigeumgayong.backend.facility.service.ImprovementCandidateFinder;
@@ -63,7 +66,12 @@ public class ImprovementAnalysisService {
     private static final String UNAVAILABLE = "UNAVAILABLE";
 
     /** 컨트롤러가 ApiResponse로 감쌀 결과 */
-    public record AnalysisResult(ImprovementAnalysisResponse data, List<Warning> warnings) {
+    /** @param retryAfterSeconds AI 호출 한도에 걸린 항목이 있으면 다시 시도할 수 있기까지 남은 초(Retry-After 헤더용), 없으면 null */
+    public record AnalysisResult(ImprovementAnalysisResponse data, List<Warning> warnings, Long retryAfterSeconds) {
+
+        public AnalysisResult(ImprovementAnalysisResponse data, List<Warning> warnings) {
+            this(data, warnings, null);
+        }
     }
 
     private final SearchCriteriaNormalizer normalizer;
@@ -71,12 +79,14 @@ public class ImprovementAnalysisService {
     private final ImprovementCache cache;
     private final LlmClient llm;
     private final LlmProperties props;
+    private final LlmRateLimiter limiter;
     private final ExecutorService executor;
     /** app.analysis.transport-link.enabled: false이면 모든 항목의 transport가 NOT_ENABLED이고 정류장 수를 LLM에 보내지 않는다 */
     private final boolean transportLinkEnabled;
 
     public ImprovementAnalysisService(SearchCriteriaNormalizer normalizer, ImprovementCandidateFinder finder,
                                       ImprovementCache cache, LlmClient llm, LlmProperties props,
+                                      LlmRateLimiter limiter,
                                       @Qualifier(AnalysisConfig.LLM_EXECUTOR) ExecutorService executor,
                                       @Value("${app.analysis.transport-link.enabled:true}") boolean transportLinkEnabled) {
         this.normalizer = normalizer;
@@ -84,6 +94,7 @@ public class ImprovementAnalysisService {
         this.cache = cache;
         this.llm = llm;
         this.props = props;
+        this.limiter = limiter;
         this.executor = executor;
         this.transportLinkEnabled = transportLinkEnabled;
     }
@@ -100,6 +111,7 @@ public class ImprovementAnalysisService {
         boolean readFailed;
         Outcome outcome; // HIT 또는 한도 초과처럼 이미 정해졌으면 채움
         volatile boolean llmCalled; // 워커 스레드가 LLM을 실제로 호출했는지 (로그용)
+        volatile long retryAfterSeconds; // AI 호출 한도에 걸렸으면 남은 초, 아니면 0
 
         Prepared(Candidate candidate, Accessibility transport, String factsJson, String sourceHash, String scopeKey,
                  String paramsKey) {
@@ -124,8 +136,14 @@ public class ImprovementAnalysisService {
         }
     }
 
+    /** 요청자 식별 정보가 없는 호출(내부·테스트). AI 호출 한도는 익명 한 사람으로 센다. */
     public AnalysisResult analyze(String keyword, String district, List<Integer> typeIds, int dayOfWeek,
                                   String startText, String endText) {
+        return analyze(keyword, district, typeIds, dayOfWeek, startText, endText, ClientKey.ANONYMOUS);
+    }
+
+    public AnalysisResult analyze(String keyword, String district, List<Integer> typeIds, int dayOfWeek,
+                                  String startText, String endText, ClientKey client) {
         long deadline = System.nanoTime() + props.requestDeadline().toNanos();
 
         // 1) 요청 검증·정규화, 2) 후보 계산 (DB 실패는 503으로 전파)
@@ -190,7 +208,7 @@ public class ImprovementAnalysisService {
         // 6) 생성(병렬). 요청 전체 제한 시간을 넘으면 남은 항목은 UNAVAILABLE
         List<Future<Outcome>> futures = new ArrayList<>();
         for (Prepared p : toGenerate) {
-            futures.add(executor.submit(() -> generate(p, deadline)));
+            futures.add(executor.submit(() -> generate(p, deadline, client)));
         }
         for (int i = 0; i < toGenerate.size(); i++) {
             toGenerate.get(i).outcome = await(futures.get(i), toGenerate.get(i), deadline);
@@ -214,9 +232,10 @@ public class ImprovementAnalysisService {
             items.add(toItem(p));
         }
         int facilityCount = (int) candidates.stream().map(c -> c.facility().getFacilityId()).distinct().count();
+        long retryAfter = prepared.stream().mapToLong(x -> x.retryAfterSeconds).max().orElse(0);
         return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), items.size(), facilityCount,
                 found.unknownSpaceCount(), items, ImprovementAnalysisResponse.DISCLAIMER),
-                List.copyOf(warnings.values()));
+                List.copyOf(warnings.values()), retryAfter > 0 ? retryAfter : null);
     }
 
     /** 캐시 조회. 조회 실패는 MISS로 보고 생성을 시도한다(CACHE_READ_FAILED 경고). */
@@ -268,7 +287,7 @@ public class ImprovementAnalysisService {
     }
 
     /** 워커 스레드: 키별 락 → 캐시 재확인 → LLM 호출 → 검증 → 저장 */
-    private Outcome generate(Prepared p, long deadline) {
+    private Outcome generate(Prepared p, long deadline, ClientKey client) {
         if (System.nanoTime() >= deadline) {
             return Outcome.unavailable(FAILED_REASON, List.of(llmWarning(p, FAILED_REASON)));
         }
@@ -294,6 +313,15 @@ public class ImprovementAnalysisService {
             if (System.nanoTime() >= deadline) {
                 warnings.add(llmWarning(p, FAILED_REASON));
                 return Outcome.unavailable(FAILED_REASON, warnings);
+            }
+
+            // OpenAI를 호출하기 직전에 한도를 확인한다. 캐시 HIT은 위에서 이미 반환했으므로 소모하지 않는다.
+            Decision decision = limiter.tryAcquire(client);
+            if (!decision.allowed()) {
+                p.retryAfterSeconds = decision.retryAfterSeconds();
+                String reason = rateLimitReason(decision.retryAfterSeconds());
+                warnings.add(Warning.of(WarningCode.RATE_LIMITED, reason, facilityId(p)));
+                return Outcome.unavailable(reason, warnings);
             }
 
             ImprovementPayload payload;
@@ -413,6 +441,10 @@ public class ImprovementAnalysisService {
             list.add("예약제 시설입니다. 운영시간만 비교했으며 예약 가능 여부는 판단하지 않습니다.");
         }
         return list;
+    }
+
+    private static String rateLimitReason(long retryAfterSeconds) {
+        return "AI 호출 한도를 초과했습니다. " + retryAfterSeconds + "초 후 다시 시도해 주세요.";
     }
 
     private static Warning llmWarning(Prepared p, String reason) {
