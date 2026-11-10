@@ -33,8 +33,8 @@ public class CorsConfig {
 			CorsConfiguration config = new CorsConfiguration();
 			config.setAllowedOrigins(origins);
 			config.setAllowedMethods(List.of("GET", "POST", "OPTIONS"));
-			config.setAllowedHeaders(List.of("Content-Type", "Accept", RequestIdHolder.HEADER));
-			config.setExposedHeaders(List.of(RequestIdHolder.HEADER));
+			config.setAllowedHeaders(List.of("Content-Type", "Accept", RequestIdHolder.HEADER, "X-Client-Id"));
+			config.setExposedHeaders(List.of(RequestIdHolder.HEADER, "Retry-After"));
 			config.setAllowCredentials(false);
 			config.setMaxAge(3600L);
 			source.registerCorsConfiguration("/api/**", config);
