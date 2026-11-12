@@ -38,6 +38,11 @@ app:
   analysis:
     transport-link:
       enabled: true # false면 A04 transport=NOT_ENABLED, 정류장 수를 LLM에 보내지 않음
+    general-suggestion:
+      # true면 부족한 점(관찰)이 없는 시설도 AI가 일반적인 보완 제안을 만든다(AI 호출이 늘어남).
+      # false(기본)면 "현재 확인된 개선 사항이 없습니다." 고정 문구를 주고 AI를 호출하지 않는다.
+      # 환경 변수: APP_ANALYSIS_GENERAL_SUGGESTION_ENABLED
+      enabled: false
   llm:
     api-key: ${OPENAI_API_KEY:}
     base-url: https://api.openai.com/v1

@@ -92,12 +92,15 @@ public class ImprovementAnalysisService {
     private final ExecutorService executor;
     /** app.analysis.transport-link.enabled: false이면 모든 항목의 transport가 NOT_ENABLED이고 정류장 수를 LLM에 보내지 않는다 */
     private final boolean transportLinkEnabled;
+    /** app.analysis.general-suggestion.enabled: true이면 부족한 점이 없는 시설도 일반 보완 제안을 LLM으로 만든다(기본 false) */
+    private final boolean generalSuggestionEnabled;
 
     public ImprovementAnalysisService(SearchCriteriaNormalizer normalizer, ImprovementCandidateFinder finder,
                                       ImprovementCache cache, LlmClient llm, LlmProperties props,
                                       LlmRateLimiter limiter,
                                       @Qualifier(AnalysisConfig.LLM_EXECUTOR) ExecutorService executor,
-                                      @Value("${app.analysis.transport-link.enabled:true}") boolean transportLinkEnabled) {
+                                      @Value("${app.analysis.transport-link.enabled:true}") boolean transportLinkEnabled,
+                                      @Value("${app.analysis.general-suggestion.enabled:false}") boolean generalSuggestionEnabled) {
         this.normalizer = normalizer;
         this.finder = finder;
         this.cache = cache;
@@ -106,6 +109,7 @@ public class ImprovementAnalysisService {
         this.limiter = limiter;
         this.executor = executor;
         this.transportLinkEnabled = transportLinkEnabled;
+        this.generalSuggestionEnabled = generalSuggestionEnabled;
     }
 
     /** 시설 한 곳의 분석 상태 */
@@ -195,7 +199,10 @@ public class ImprovementAnalysisService {
         String fid = String.valueOf(facilityId);
         addTransportWarning(warnings, transport, fid);
 
-        // 5) 관찰이 없으면 LLM 없이 고정 문구
+        // 5) 관찰이 없으면 LLM 없이 고정 문구. 단, 일반 보완 제안을 켠 경우에는 대체 관찰 하나로 LLM 흐름을 그대로 탄다
+        if (observations.isEmpty() && generalSuggestionEnabled) {
+            observations = List.of(ImprovementObservations.generalReview());
+        }
         if (observations.isEmpty()) {
             List<ImprovementItem> items = spaces.stream().map(c -> noIssueItem(c, transport)).toList();
             return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), items.size(), 1,

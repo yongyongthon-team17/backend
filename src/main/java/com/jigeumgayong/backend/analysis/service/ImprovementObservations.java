@@ -28,6 +28,18 @@ final class ImprovementObservations {
     static final String DAY_VARIANCE = "DAY_VARIANCE";
     static final String RESERVATION_REQUIRED = "RESERVATION_REQUIRED";
     static final String FEW_BUS_STOPS = "FEW_BUS_STOPS";
+    /** 부족한 점이 하나도 없을 때만 쓰는 대체 관찰(일반 보완 검토). 설정으로 켜야 한다 */
+    static final String GENERAL_REVIEW = "GENERAL_REVIEW";
+
+    /**
+     * 부족한 점이 없는 시설용 관찰. 서버가 만든 사실이므로 LLM 응답의 근거 id 검증을 그대로 거친다.
+     * detail이 LLM 입력에 들어가므로, 새로운 문제·수치를 만들지 않고 일반 방향만 제안하라는 제한을 함께 적는다.
+     */
+    static Observation generalReview() {
+        return new Observation("O1", GENERAL_REVIEW, null,
+                "확인된 부족한 점은 없음. 입력에 있는 운영시간과 교통 사실만 근거로 하고 새로운 문제나 수치를 만들지 말 것. "
+                        + "이용 안내 공개, 운영 현황 점검, 이용 편의 보완 같은 일반적인 검토 방향만 제안할 것");
+    }
 
     /** 요일별 운영 시간 길이가 이 값(분) 이상 차이 나면 DAY_VARIANCE (임의 기준, 해커톤용) */
     static final int VARIANCE_MINUTES = 120;
