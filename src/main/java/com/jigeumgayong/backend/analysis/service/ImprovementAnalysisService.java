@@ -15,6 +15,9 @@ import com.jigeumgayong.backend.analysis.llm.LlmProperties;
 import com.jigeumgayong.backend.analysis.ratelimit.ClientKey;
 import com.jigeumgayong.backend.analysis.ratelimit.LlmRateLimiter;
 import com.jigeumgayong.backend.analysis.ratelimit.LlmRateLimiter.Decision;
+import com.jigeumgayong.backend.analysis.service.ImprovementObservations.Observation;
+import com.jigeumgayong.backend.analysis.service.ImprovementPayload.Context;
+import com.jigeumgayong.backend.analysis.service.ImprovementPayload.SpaceProposal;
 import com.jigeumgayong.backend.analysis.service.ImprovementPrompt.Facts;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.Coordinates;
 import com.jigeumgayong.backend.facility.service.ImprovementCandidateFinder;
@@ -37,6 +40,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
@@ -51,16 +56,17 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 /**
- * A04 공간별 불일치 분석 및 AI 개선안. 대상은 요청의 facilityId 한 시설의 공간(최대 3개)이다.
- * 흐름: 후보 계산 → 후보별 캐시 조회(HIT이면 LLM 미호출) → MISS 중 앞에서 N개만 LLM 생성(병렬)
- * → 검증 통과분만 저장 → 응답 조립. LLM·캐시 일부 실패는 200 부분 응답으로 처리한다.
+ * A04 AI 개선안. 대상은 요청의 facilityId 한 시설이며, 희망 시간에 이용 가능한지와 관계없이 개선안을 만든다.
+ * 흐름: 공간·관찰 계산 → 시설 단위 캐시 조회(HIT이면 LLM 미호출) → MISS면 시설당 LLM 1회 생성
+ * → 검증 통과분만 저장 → 공간별 항목으로 응답 조립. LLM·캐시 실패는 200 부분 응답으로 처리한다.
+ * 관찰(부족한 점)이 하나도 없으면 LLM을 호출하지 않고 고정 문구를 돌려준다.
  */
 @Slf4j
 @Service
 public class ImprovementAnalysisService {
 
-    static final String LIMIT_REASON = "이번 요청의 생성 한도 초과";
     static final String FAILED_REASON = "AI 제안을 생성하지 못했습니다.";
+    static final String NO_ISSUE_TEXT = "현재 확인된 개선 사항이 없습니다.";
 
     private static final String HIT = "HIT";
     private static final String CREATED = "CREATED";
@@ -102,24 +108,28 @@ public class ImprovementAnalysisService {
         this.transportLinkEnabled = transportLinkEnabled;
     }
 
-    /** 후보 한 건의 처리 상태 */
+    /** 시설 한 곳의 분석 상태 */
     private static final class Prepared {
-        final Candidate candidate;
+        final long facilityId;
+        final List<Candidate> spaces;
         final Accessibility transport;
+        final Context ctx;
         final String factsJson;
         final String sourceHash;
         final String scopeKey;
         final String paramsKey;
         AiAnalysis existing;
         boolean readFailed;
-        Outcome outcome; // HIT 또는 한도 초과처럼 이미 정해졌으면 채움
+        Outcome outcome; // HIT이면 미리 채움
         volatile boolean llmCalled; // 워커 스레드가 LLM을 실제로 호출했는지 (로그용)
         volatile long retryAfterSeconds; // AI 호출 한도에 걸렸으면 남은 초, 아니면 0
 
-        Prepared(Candidate candidate, Accessibility transport, String factsJson, String sourceHash, String scopeKey,
-                 String paramsKey) {
-            this.candidate = candidate;
+        Prepared(long facilityId, List<Candidate> spaces, Accessibility transport, Context ctx, String factsJson,
+                 String sourceHash, String scopeKey, String paramsKey) {
+            this.facilityId = facilityId;
+            this.spaces = spaces;
             this.transport = transport;
+            this.ctx = ctx;
             this.factsJson = factsJson;
             this.sourceHash = sourceHash;
             this.scopeKey = scopeKey;
@@ -169,82 +179,68 @@ public class ImprovementAnalysisService {
         Map<String, Warning> warnings = new LinkedHashMap<>();
         addWarning(warnings, Warning.of(WarningCode.WEEKLY_SCHEDULE_ONLY,
                 "정규 운영시간 기준입니다. 공휴일·임시휴관과 예약 여부는 별도 확인하세요."));
-        if (found.unknownSpaceCount() > 0) {
-            addWarning(warnings, Warning.of(WarningCode.UNKNOWN_HOURS_EXCLUDED,
-                    "운영시간을 확인할 수 없는 공간 " + found.unknownSpaceCount() + "곳은 분석에서 제외했습니다."));
-        }
 
-        // 3) 후보가 없으면 LLM 호출 없이 반환
-        List<Candidate> candidates = found.candidates();
-        if (candidates.isEmpty()) {
+        // 3) 공간이 하나도 없으면 분석할 것이 없다
+        List<Candidate> spaces = found.candidates();
+        if (spaces.isEmpty()) {
             return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), 0, 0,
                     found.unknownSpaceCount(), List.of(), ImprovementAnalysisResponse.DISCLAIMER),
                     List.copyOf(warnings.values()));
         }
 
-        // 4) 캐시 조회: 후보 순서(facilityId, spaceType) 그대로. HIT은 LLM을 호출하지 않는다
-        List<Prepared> prepared = new ArrayList<>();
-        for (Candidate c : candidates) {
-            // 이미 로드된 Facility.busStopCount를 읽는다(추가 쿼리 없음)
-            Accessibility transport = ImprovementTransport.of(c, transportLinkEnabled);
-            Facts facts = ImprovementPrompt.facts(c, transport);
-            String factsJson = ImprovementPrompt.factsJson(facts);
-            long fid = c.facility().getFacilityId();
-            Prepared p = new Prepared(c, transport, factsJson, ImprovementPrompt.sourceHash(factsJson),
-                    ImprovementCache.scopeKey(fid),
-                    ImprovementCache.paramsKey(c.spaceType(), c.dayOfWeek(), c.startMin(), c.endMin()));
-            lookup(p);
-            if (p.readFailed) {
-                addWarning(warnings, Warning.of(WarningCode.CACHE_READ_FAILED,
-                        "AI 캐시를 조회하지 못해 새로 생성을 시도했습니다.", facilityId(p)));
-            }
-            prepared.add(p);
+        // 4) 교통(이미 로드된 Facility.busStopCount)과 관찰(부족한 점)을 계산한다
+        Accessibility transport = ImprovementTransport.of(spaces.get(0), transportLinkEnabled);
+        List<Observation> observations = ImprovementObservations.build(spaces, finder.weeklyHours(facilityId),
+                transport);
+        String fid = String.valueOf(facilityId);
+        addTransportWarning(warnings, transport, fid);
+
+        // 5) 관찰이 없으면 LLM 없이 고정 문구
+        if (observations.isEmpty()) {
+            List<ImprovementItem> items = spaces.stream().map(c -> noIssueItem(c, transport)).toList();
+            return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), items.size(), 1,
+                    found.unknownSpaceCount(), items, ImprovementAnalysisResponse.DISCLAIMER),
+                    List.copyOf(warnings.values()));
         }
 
-        // 5) MISS 중 앞에서 maxGenerationsPerRequest개만 생성 대상. 나머지는 한도 초과(UNAVAILABLE)
-        List<Prepared> toGenerate = new ArrayList<>();
-        for (Prepared p : prepared) {
-            if (p.outcome != null) {
-                continue;
-            }
-            if (toGenerate.size() < props.maxGenerationsPerRequest()) {
-                toGenerate.add(p);
-            } else {
-                p.outcome = Outcome.unavailable(LIMIT_REASON, List.of(llmWarning(p, LIMIT_REASON)));
-            }
+        // 6) 시설 단위 캐시 조회. HIT은 LLM을 호출하지 않는다
+        Facts facts = ImprovementPrompt.facts(spaces, transport, observations);
+        String factsJson = ImprovementPrompt.factsJson(facts);
+        Set<String> observationIds = observations.stream().map(Observation::id).collect(Collectors.toSet());
+        Prepared p = new Prepared(facilityId, spaces, transport, new Context(spaces, observationIds, factsJson),
+                factsJson, ImprovementPrompt.sourceHash(factsJson), ImprovementCache.scopeKey(facilityId),
+                ImprovementCache.paramsKey(dayOfWeek, n.startMin(), n.endMin()));
+        lookup(p);
+        if (p.readFailed) {
+            addWarning(warnings, Warning.of(WarningCode.CACHE_READ_FAILED,
+                    "AI 캐시를 조회하지 못해 새로 생성을 시도했습니다.", fid));
         }
 
-        // 6) 생성(병렬). 요청 전체 제한 시간을 넘으면 남은 항목은 UNAVAILABLE
-        List<Future<Outcome>> futures = new ArrayList<>();
-        for (Prepared p : toGenerate) {
-            futures.add(executor.submit(() -> generate(p, deadline, client)));
-        }
-        for (int i = 0; i < toGenerate.size(); i++) {
-            toGenerate.get(i).outcome = await(futures.get(i), toGenerate.get(i), deadline);
+        // 7) 생성(시설당 1회). 요청 전체 제한 시간을 넘으면 UNAVAILABLE
+        if (p.outcome == null) {
+            Future<Outcome> future = executor.submit(() -> generate(p, deadline, client));
+            p.outcome = await(future, p, deadline);
         }
 
-        // 7) 응답 조립
-        List<ImprovementItem> items = new ArrayList<>();
-        for (Prepared p : prepared) {
-            p.outcome.warnings().forEach(w -> addWarning(warnings, w));
-            // A05 컨트롤러와 같은 코드·문구. NOT_ENABLED는 경고하지 않는다. (code, facilityId)당 한 번만 담긴다
-            if (p.transport.status() == Status.NO_DATA) {
-                addWarning(warnings, Warning.of(WarningCode.TRANSPORT_DATA_UNAVAILABLE,
-                        "교통 정보를 확인할 수 없습니다.", facilityId(p)));
-            } else if (p.transport.status() == Status.AVAILABLE) {
-                addWarning(warnings, Warning.of(WarningCode.GRADE_RULE_NOT_DEFINED,
-                        "정류장 수는 제공하지만 등급 기준은 미정입니다.", facilityId(p)));
-            }
-            // 키·요청/응답 본문·헤더는 남기지 않는다. 시설·공간 식별자와 처리 결과만 기록한다
-            log.info("A04 분석 facilityId={} space={} cache={} llmCalled={}", p.candidate.facility().getFacilityId(),
-                    p.candidate.spaceType(), p.outcome.cacheStatus(), p.llmCalled);
-            items.add(toItem(p));
-        }
-        int facilityCount = (int) candidates.stream().map(c -> c.facility().getFacilityId()).distinct().count();
-        long retryAfter = prepared.stream().mapToLong(x -> x.retryAfterSeconds).max().orElse(0);
-        return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), items.size(), facilityCount,
+        // 8) 응답 조립: 공간마다 항목 하나, 시설 종합 문장은 항목마다 같다
+        p.outcome.warnings().forEach(w -> addWarning(warnings, w));
+        // 키·요청/응답 본문·헤더는 남기지 않는다. 시설 식별자와 처리 결과만 기록한다
+        log.info("A04 분석 facilityId={} cache={} llmCalled={}", facilityId, p.outcome.cacheStatus(), p.llmCalled);
+        List<ImprovementItem> items = spaces.stream().map(c -> toItem(p, c)).toList();
+        return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), items.size(), 1,
                 found.unknownSpaceCount(), items, ImprovementAnalysisResponse.DISCLAIMER),
-                List.copyOf(warnings.values()), retryAfter > 0 ? retryAfter : null);
+                List.copyOf(warnings.values()), p.retryAfterSeconds > 0 ? p.retryAfterSeconds : null);
+    }
+
+    /** A05 컨트롤러와 같은 코드·문구. NOT_ENABLED는 경고하지 않는다. */
+    private static void addTransportWarning(Map<String, Warning> warnings, Accessibility transport, String fid) {
+        if (transport.status() == Status.NO_DATA) {
+            addWarning(warnings, Warning.of(WarningCode.TRANSPORT_DATA_UNAVAILABLE,
+                    "교통 정보를 확인할 수 없습니다.", fid));
+        } else if (transport.status() == Status.AVAILABLE) {
+            addWarning(warnings, Warning.of(WarningCode.GRADE_RULE_NOT_DEFINED,
+                    "정류장 수는 제공하지만 등급 기준은 미정입니다.", fid));
+        }
     }
 
     /** 캐시 조회. 조회 실패는 MISS로 보고 생성을 시도한다(CACHE_READ_FAILED 경고). */
@@ -268,7 +264,7 @@ public class ImprovementAnalysisService {
             return Optional.empty();
         }
         try {
-            return Optional.of(ImprovementPayload.fromStored(row.getPayload(), p.candidate, p.factsJson));
+            return Optional.of(ImprovementPayload.fromStored(row.getPayload(), p.ctx));
         } catch (InvalidPayloadException e) {
             log.warn("저장된 AI payload 검증 실패(재생성): {}", e.getMessage());
             return Optional.empty();
@@ -338,7 +334,7 @@ public class ImprovementAnalysisService {
                 p.llmCalled = true;
                 String text = llm.generateJson(ImprovementPrompt.INSTRUCTIONS, p.factsJson,
                         ImprovementPrompt.SCHEMA_NAME, ImprovementPrompt.outputSchema());
-                payload = ImprovementPayload.fromLlm(text, p.candidate, p.factsJson);
+                payload = ImprovementPayload.fromLlm(text, p.ctx);
             } catch (RuntimeException e) {
                 // 키 없음·타임아웃·거부·JSON/검증 실패. 검증 실패 결과는 저장하지 않는다.
                 log.warn("AI 개선안 생성 실패: {}", e.getMessage());
@@ -351,9 +347,9 @@ public class ImprovementAnalysisService {
 
     private Outcome store(Prepared p, AiAnalysis current, boolean readFailed, ImprovementPayload payload,
                           List<Warning> warnings) {
-        Candidate c = p.candidate;
         try {
-            AiAnalysis saved = cache.save(readFailed ? null : current, c.facility().getFacilityId(), c.spaceType(),
+            // 시설 단위 행이라 space_type은 비운다
+            AiAnalysis saved = cache.save(readFailed ? null : current, p.facilityId, null,
                     p.paramsKey, payload.toJson(), p.sourceHash, ImprovementPrompt.PROMPT_VERSION,
                     llm.modelName());
             if (current != null && !readFailed) {
@@ -382,13 +378,9 @@ public class ImprovementAnalysisService {
 
     // --- 응답 조립 ---
 
-    private ImprovementItem toItem(Prepared p) {
-        Candidate c = p.candidate;
+    private ImprovementItem toItem(Prepared p, Candidate c) {
         Outcome o = p.outcome;
-        var f = c.facility();
-        FacilityBase base = new FacilityBase(String.valueOf(f.getFacilityId()), f.getType().getTypeId(),
-                f.getType().getName(), f.getDistrict(), f.getAccessType().name(), f.getName(), f.getAddress(),
-                f.getType().getDefaultImage(), new Coordinates(f.getLatitude(), f.getLongitude()));
+        FacilityBase base = facilityBase(c);
         String currentClosing = c.currentCloseMin() == null ? null : TimeText.format(c.currentCloseMin());
         Accessibility transport = p.transport;
         WeakTimeAnalysis weak = new WeakTimeAnalysis("NOT_SUPPORTED", List.of());
@@ -400,16 +392,35 @@ public class ImprovementAnalysisService {
                     new CacheInfo(UNAVAILABLE, null), limitations(c, transport));
         }
         ImprovementPayload pl = o.payload();
+        SpaceProposal sp = pl.proposalOf(c.spaceType().name());
+        List<String> alternatives = sp == null ? List.of()
+                : sp.alternatives().stream().map(ImprovementPayload.Alternative::text).toList();
+        String proposed = sp == null || sp.proposedCloseMin() == null ? null : TimeText.format(sp.proposedCloseMin());
         boolean stored = o.analysisId() != null;
         return new ImprovementItem(base, c.spaceType().name(), c.spaceLabel(), c.selectedSchedule(),
-                c.availability(), currentClosing,
-                pl.proposedCloseMin() == null ? null : TimeText.format(pl.proposedCloseMin()),
-                "GENERATED", reasonFor(c), pl.alternatives(),
+                c.availability(), currentClosing, proposed, "GENERATED", reasonFor(c), alternatives,
                 new IntegratedSuggestion(suggestionStatus(pl, transport), pl.integratedSuggestion()), transport, weak,
                 stored ? String.valueOf(o.analysisId()) : null,
                 new CacheInfo(o.cacheStatus(), stored && o.time() != null
                         ? o.time().atZone(Meta.ZONE).toOffsetDateTime().truncatedTo(ChronoUnit.SECONDS) : null),
                 limitations(c, transport));
+    }
+
+    /** 관찰이 없을 때의 항목. LLM을 부르지 않았으므로 제안은 비고 고정 문구만 있다(저장하지 않음). */
+    private ImprovementItem noIssueItem(Candidate c, Accessibility transport) {
+        String currentClosing = c.currentCloseMin() == null ? null : TimeText.format(c.currentCloseMin());
+        return new ImprovementItem(facilityBase(c), c.spaceType().name(), c.spaceLabel(), c.selectedSchedule(),
+                c.availability(), currentClosing, null, "UNAVAILABLE", NO_ISSUE_TEXT, List.of(),
+                new IntegratedSuggestion("UNAVAILABLE", NO_ISSUE_TEXT), transport,
+                new WeakTimeAnalysis("NOT_SUPPORTED", List.of()), null, new CacheInfo(UNAVAILABLE, null),
+                limitations(c, transport));
+    }
+
+    private static FacilityBase facilityBase(Candidate c) {
+        var f = c.facility();
+        return new FacilityBase(String.valueOf(f.getFacilityId()), f.getType().getTypeId(),
+                f.getType().getName(), f.getDistrict(), f.getAccessType().name(), f.getName(), f.getAddress(),
+                f.getType().getDefaultImage(), new Coordinates(f.getLatitude(), f.getLongitude()));
     }
 
     /**
@@ -424,7 +435,11 @@ public class ImprovementAnalysisService {
     private static String reasonFor(Candidate c) {
         String range = TimeText.format(c.startMin()) + "–" + TimeText.format(c.endMin());
         String reason;
-        if (c.currentCloseMin() == null) {
+        if ("UNKNOWN".equals(c.availability().status())) {
+            reason = c.spaceLabel() + "은(는) 해당 요일 운영시간을 확인할 수 없습니다.";
+        } else if ("AVAILABLE".equals(c.availability().status())) {
+            reason = c.spaceLabel() + "은(는) 희망 시간(" + range + ")에 이용할 수 있습니다. 운영 현황을 바탕으로 한 보완 제안입니다.";
+        } else if (c.currentCloseMin() == null) {
             reason = c.spaceLabel() + "은(는) 해당 요일 정기 휴관이라 희망 시간(" + range + ")에 이용할 수 없습니다.";
         } else if (c.extendable()) {
             reason = c.spaceLabel() + "의 운영 종료(" + TimeText.format(c.currentCloseMin())
@@ -484,7 +499,7 @@ public class ImprovementAnalysisService {
     }
 
     private static String facilityId(Prepared p) {
-        return String.valueOf(p.candidate.facility().getFacilityId());
+        return String.valueOf(p.facilityId);
     }
 
     /** (code, facilityId)가 같은 경고는 한 번만 */

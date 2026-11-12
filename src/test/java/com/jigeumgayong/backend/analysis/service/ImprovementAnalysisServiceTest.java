@@ -122,30 +122,84 @@ class ImprovementAnalysisServiceTest {
     }
 
     @Test
-    void 후보가_없으면_LLM을_호출하지_않는다() {
+    void 부족한_점이_없으면_LLM을_호출하지_않고_고정_문구를_준다() {
         Facility f = facility(AccessType.OPEN_HOURS);
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
-        open(f, SpaceType.DEFAULT, 540, 1320); // 22시까지 운영
+        open(f, SpaceType.DEFAULT, 540, 1320); // 22시까지 운영, 다른 요일·정류장 정보 없음
 
         AnalysisResult r = run();
 
-        assertThat(r.data().candidateCount()).isZero();
-        assertThat(r.data().items()).isEmpty();
+        assertThat(r.data().candidateCount()).isEqualTo(1);
+        ImprovementItem item = r.data().items().get(0);
+        assertThat(item.availability().status()).isEqualTo("AVAILABLE");
+        assertThat(item.proposalStatus()).isEqualTo("UNAVAILABLE");
+        assertThat(item.proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
+        assertThat(item.alternatives()).isEmpty();
+        assertThat(item.integratedSuggestion().text()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
+        assertThat(item.suggestionId()).isNull();
         assertThat(llm.calls.get()).isZero();
-        assertThat(codes(r)).containsExactly("WEEKLY_SCHEDULE_ONLY");
+        assertThat(aiRepository.count()).isZero();
+        assertThat(codes(r)).contains("WEEKLY_SCHEDULE_ONLY");
+    }
+
+    private void openOn(Facility f, SpaceType t, int day, int openMin, int closeMin) {
+        hourRepository.save(OperatingHour.builder().facilityId(f.getFacilityId()).spaceType(t)
+                .dayOfWeek((short) day).intervalSeq((short) 1).dayState(DayState.OPEN)
+                .openMin((short) openMin).closeMin((short) closeMin).build());
     }
 
     @Test
-    void 후보가_없고_unknown이_있으면_경고로_알린다() {
+    void 희망_시간에_이용_가능한_시설도_요일_편차로_개선안이_나온다() {
+        Facility f = facility(AccessType.OPEN_HOURS);
+        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+        open(f, SpaceType.DEFAULT, 540, 1320); // 화요일 09~22시: 19~21시 이용 가능
+        openOn(f, SpaceType.DEFAULT, 5, 540, 780); // 토요일 09~13시 → 평일과 9시간 차이
+
+        AnalysisResult r = run();
+
+        ImprovementItem item = r.data().items().get(0);
+        assertThat(item.availability().status()).isEqualTo("AVAILABLE");
+        assertThat(item.proposalStatus()).isEqualTo("GENERATED");
+        assertThat(item.proposedClosingTime()).isNull(); // 이미 덮이므로 종료 연장 제안은 없다
+        assertThat(item.alternatives()).isNotEmpty();
+        assertThat(item.proposalReason()).contains("이용할 수 있습니다");
+        assertThat(item.cache().status()).isEqualTo("CREATED");
+        assertThat(llm.calls.get()).isEqualTo(1);
+        // LLM에 넘긴 사실에 요일 편차 관찰이 있다
+        assertThat(aiRepository.findAll().get(0).getPayload()).contains("\"basedOn\"");
+    }
+
+    @Test
+    void 정류장이_적으면_이용_가능한_시설도_교통_관찰로_개선안이_나온다() {
+        Facility f = facility(AccessType.OPEN_HOURS);
+        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+        open(f, SpaceType.DEFAULT, 540, 1320);
+        setBusStops(f, 2);
+
+        AnalysisResult r = run();
+
+        assertThat(r.data().items().get(0).proposalStatus()).isEqualTo("GENERATED");
+        assertThat(r.data().items().get(0).transport().status().name()).isEqualTo("AVAILABLE");
+        assertThat(llm.calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void 운영시간을_모르는_시설은_정보_확인을_제안하는_개선안이_나온다() {
         Facility f = facility(AccessType.OPEN_HOURS);
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체")); // 행 없음
 
         AnalysisResult r = run();
 
-        assertThat(r.data().candidateCount()).isZero();
+        assertThat(r.data().candidateCount()).isEqualTo(1);
         assertThat(r.data().unknownSpaceCount()).isEqualTo(1);
-        assertThat(codes(r)).contains("UNKNOWN_HOURS_EXCLUDED");
-        assertThat(llm.calls.get()).isZero();
+        ImprovementItem item = r.data().items().get(0);
+        assertThat(item.availability().status()).isEqualTo("UNKNOWN");
+        assertThat(item.currentClosingTime()).isNull();
+        assertThat(item.proposedClosingTime()).isNull();
+        assertThat(item.proposalStatus()).isEqualTo("GENERATED");
+        assertThat(item.proposalReason()).contains("운영시간을 확인할 수 없습니다");
+        assertThat(codes(r)).doesNotContain("UNKNOWN_HOURS_EXCLUDED"); // 이제 제외하지 않고 분석한다
+        assertThat(llm.calls.get()).isEqualTo(1);
     }
 
     @Test
@@ -182,8 +236,8 @@ class ImprovementAnalysisServiceTest {
 
         String id = String.valueOf(f.getFacilityId());
         assertThat(output.getAll())
-                .contains("A04 분석 facilityId=" + id + " space=DEFAULT cache=CREATED llmCalled=true")
-                .contains("A04 분석 facilityId=" + id + " space=DEFAULT cache=HIT llmCalled=false")
+                .contains("A04 분석 facilityId=" + id + " cache=CREATED llmCalled=true")
+                .contains("A04 분석 facilityId=" + id + " cache=HIT llmCalled=false")
                 .doesNotContain("integratedSuggestion").doesNotContain("Authorization");
     }
 
@@ -195,16 +249,17 @@ class ImprovementAnalysisServiceTest {
         AiAnalysis row = aiRepository.findAll().get(0);
 
         assertThat(row.getModelName()).isEqualTo("fake-model");
-        assertThat(row.getPromptVersion()).isEqualTo("imp-v2");
+        assertThat(row.getPromptVersion()).isEqualTo("imp-v3");
         assertThat(row.getSourceHash()).hasSize(64);
         assertThat(row.getScopeKey()).startsWith("FAC:");
-        assertThat(row.getParamsKey()).isEqualTo("S:DEFAULT|D:1|T:1140-1260");
+        assertThat(row.getParamsKey()).isEqualTo("D:1|T:1140-1260"); // 시설 단위라 공간은 키에 없다
+        assertThat(row.getSpaceType()).isNull();
         assertThat(jdbc.queryForObject("select cast(payload as varchar) from ai_analysis", String.class))
                 .startsWith("{").contains("\"proposedCloseMin\":1260");
     }
 
     @Test
-    void 같은_시설_요일_시간이어도_spaceType이_다르면_캐시_행이_따로_생긴다() {
+    void 공간이_여럿이어도_LLM은_한_번이고_캐시_행은_시설당_하나다() {
         Facility f = facility(AccessType.OPEN_HOURS);
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.GENERAL, "종합자료실"));
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.READING, "열람실"));
@@ -216,8 +271,13 @@ class ImprovementAnalysisServiceTest {
         assertThat(r.data().candidateCount()).isEqualTo(2);
         assertThat(r.data().facilityCount()).isEqualTo(1);
         assertThat(r.data().items()).extracting(ImprovementItem::spaceType).containsExactly("GENERAL", "READING");
-        assertThat(aiRepository.count()).isEqualTo(2); // T14
-        assertThat(r.data().items().get(0).suggestionId()).isNotEqualTo(r.data().items().get(1).suggestionId());
+        assertThat(aiRepository.count()).isEqualTo(1);
+        assertThat(llm.calls.get()).isEqualTo(1);
+        // 공간별 항목이 같은 캐시 행과 같은 시설 종합 문장을 공유한다
+        assertThat(r.data().items().get(0).suggestionId()).isEqualTo(r.data().items().get(1).suggestionId());
+        assertThat(r.data().items().get(0).integratedSuggestion().text())
+                .isEqualTo(r.data().items().get(1).integratedSuggestion().text());
+        assertThat(r.data().items()).allMatch(i -> "GENERATED".equals(i.proposalStatus()));
     }
 
     @Test
@@ -249,16 +309,16 @@ class ImprovementAnalysisServiceTest {
         ImprovementItem item = run().data().items().get(0);
 
         assertThat(item.cache().status()).isEqualTo("CREATED");
-        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v2");
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v3");
         assertThat(llm.calls.get()).isEqualTo(2);
     }
 
     @Test
-    void 기존_imp_v1_캐시는_같은_행을_imp_v2로_재생성한다() {
+    void 기존_imp_v2_캐시는_같은_행을_imp_v3로_재생성한다() {
         closedEvening(AccessType.OPEN_HOURS);
         String firstId = run().data().items().get(0).suggestionId();
         AiAnalysis row = aiRepository.findAll().get(0);
-        row.regenerate(row.getPayload(), row.getSourceHash(), "imp-v1", row.getModelName());
+        row.regenerate(row.getPayload(), row.getSourceHash(), "imp-v2", row.getModelName());
         aiRepository.saveAndFlush(row);
 
         AnalysisResult r = run();
@@ -266,7 +326,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(r.data().items().get(0).cache().status()).isEqualTo("CREATED");
         assertThat(r.data().items().get(0).suggestionId()).isEqualTo(firstId);
         assertThat(aiRepository.count()).isEqualTo(1);
-        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v2");
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v3");
         assertThat(codes(r)).contains("CACHE_INVALIDATED");
         assertThat(llm.calls.get()).isEqualTo(2);
     }
@@ -550,11 +610,17 @@ class ImprovementAnalysisServiceTest {
     }
 
     @Test
-    void ALWAYS_OPEN은_후보에서_제외한다() {
+    void ALWAYS_OPEN은_항상_이용_가능한_공간이고_부족한_점이_없으면_고정_문구다() {
         Facility f = facility(AccessType.ALWAYS_OPEN);
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
 
-        assertThat(run().data().candidateCount()).isZero();
+        AnalysisResult r = run();
+
+        assertThat(r.data().candidateCount()).isEqualTo(1);
+        assertThat(r.data().items().get(0).availability().status()).isEqualTo("AVAILABLE");
+        assertThat(r.data().items().get(0).selectedSchedule().intervals().get(0).closeTime()).isEqualTo("24:00");
+        assertThat(r.data().items().get(0).proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
+        assertThat(llm.calls.get()).isZero();
     }
 
     @Test
@@ -622,8 +688,8 @@ class ImprovementAnalysisServiceTest {
         assertThat(r.data().items()).allSatisfy(i -> assertThat(i.facility().facilityId())
                 .isEqualTo(String.valueOf(lib.getFacilityId())));
         assertThat(r.data().facilityCount()).isEqualTo(1);
-        assertThat(llm.calls.get()).isEqualTo(2); // 그 시설의 불일치 공간 수
-        assertThat(aiRepository.count()).isEqualTo(2);
+        assertThat(llm.calls.get()).isEqualTo(1); // 시설당 LLM 1회
+        assertThat(aiRepository.count()).isEqualTo(1);
     }
 
     @Test
@@ -652,27 +718,28 @@ class ImprovementAnalysisServiceTest {
     }
 
     @Test
-    void facilityId가_ALWAYS_OPEN_시설이면_빈_items다() {
-        Facility f = facility(AccessType.ALWAYS_OPEN);
-        spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+    void facilityId가_공간이_없는_시설이면_빈_items다() {
+        Facility f = facility(AccessType.OPEN_HOURS);
 
         AnalysisResult r = runFor(f.getFacilityId());
 
         assertThat(r.data().items()).isEmpty();
         assertThat(r.data().candidateCount()).isZero();
+        assertThat(r.data().facilityCount()).isZero();
         assertThat(llm.calls.get()).isZero();
     }
 
     @Test
-    void facilityId_시설에_불일치_공간이_없으면_빈_items다() {
+    void facilityId_시설에_부족한_점이_없으면_다른_시설과_관계없이_LLM을_호출하지_않는다() {
         Facility f = facility(AccessType.OPEN_HOURS);
         spaceRepository.save(new FacilitySpace(f.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
         open(f, SpaceType.DEFAULT, 540, 1320);
-        closedEvening(AccessType.OPEN_HOURS); // 다른 시설은 불일치가 있어도 후보가 아니다
+        closedEvening(AccessType.OPEN_HOURS); // 다른 시설은 불일치가 있어도 대상이 아니다
 
         AnalysisResult r = runFor(f.getFacilityId());
 
-        assertThat(r.data().items()).isEmpty();
+        assertThat(r.data().items()).hasSize(1);
+        assertThat(r.data().items().get(0).proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
         assertThat(llm.calls.get()).isZero();
     }
 

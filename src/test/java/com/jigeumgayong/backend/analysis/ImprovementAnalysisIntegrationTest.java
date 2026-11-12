@@ -138,14 +138,21 @@ class ImprovementAnalysisIntegrationTest {
     }
 
     @Test
-    void 후보_0건이면_빈_items와_함께_200이다() throws Exception {
+    void 관찰이_없으면_LLM_없이_고정_문구로_200이다() throws Exception {
+        // 10~12시는 09~18시 운영 안이고 다른 요일 정보·정류장 수도 없어 부족한 점이 하나도 없다
         mvc.perform(post(URL).contentType(MediaType.APPLICATION_JSON)
                         .content(req("{\"dayOfWeek\":1,\"startTime\":\"10:00\",\"endTime\":\"12:00\"}")))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.candidateCount").value(0))
-                .andExpect(jsonPath("$.data.facilityCount").value(0))
-                .andExpect(jsonPath("$.data.items").isEmpty());
+                .andExpect(jsonPath("$.data.candidateCount").value(1))
+                .andExpect(jsonPath("$.data.facilityCount").value(1))
+                .andExpect(jsonPath("$.data.items[0].availability.status").value("AVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].proposalStatus").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].proposalReason").value("현재 확인된 개선 사항이 없습니다."))
+                .andExpect(jsonPath("$.data.items[0].alternatives").isEmpty())
+                .andExpect(jsonPath("$.data.items[0].integratedSuggestion.text").value("현재 확인된 개선 사항이 없습니다."))
+                .andExpect(jsonPath("$.data.items[0].cache.status").value("UNAVAILABLE"));
         assertThat(llm.calls.get()).isZero();
+        assertThat(aiRepository.count()).isZero();
     }
 
     @Test

@@ -28,9 +28,9 @@ public class ImprovementCache {
         return "FAC:" + facilityId;
     }
 
-    /** 10번 §7: S:GENERAL|D:1|T:1140-1260 (공간|요일|희망 분 구간) */
-    static String paramsKey(SpaceType space, int dayOfWeek, int startMin, int endMin) {
-        return "S:" + space.name() + "|D:" + dayOfWeek + "|T:" + startMin + "-" + endMin;
+    /** 10번 §7: D:1|T:1140-1260 (요일|희망 분 구간). 시설 단위 분석이라 공간은 키에 넣지 않는다 */
+    static String paramsKey(int dayOfWeek, int startMin, int endMin) {
+        return "D:" + dayOfWeek + "|T:" + startMin + "-" + endMin;
     }
 
     Optional<AiAnalysis> find(String scopeKey, String paramsKey) {

@@ -98,12 +98,19 @@ class ImprovementCandidateFinderTest {
     }
 
     @Test
-    void 희망_시간을_모두_덮으면_후보가_아니다() {
+    void 희망_시간을_모두_덮어도_분석_대상이고_이용_가능이며_연장_대상은_아니다() {
         Facility f = facility(AccessType.OPEN_HOURS);
         space(f, SpaceType.DEFAULT, "시설 전체");
         open(f, SpaceType.DEFAULT, 1, 540, 1320);
 
-        assertThat(find(f, "19:00", "21:00").candidates()).isEmpty();
+        List<Candidate> list = find(f, "19:00", "21:00").candidates();
+
+        assertThat(list).hasSize(1);
+        Candidate c = list.get(0);
+        assertThat(c.availability().status()).isEqualTo("AVAILABLE");
+        assertThat(c.availability().unavailableIntervals()).isEmpty();
+        assertThat(c.currentCloseMin()).isEqualTo(1320);
+        assertThat(c.extendable()).isFalse();
     }
 
     @Test
@@ -121,7 +128,7 @@ class ImprovementCandidateFinderTest {
     }
 
     @Test
-    void UNKNOWN과_행_없음은_후보가_아니라_unknownSpaceCount다() {
+    void UNKNOWN과_행_없음도_분석_대상이고_unknownSpaceCount에_센다() {
         Facility a = facility(AccessType.OPEN_HOURS);
         space(a, SpaceType.DEFAULT, "시설 전체");
         state(a, SpaceType.DEFAULT, DayState.UNKNOWN);
@@ -131,19 +138,31 @@ class ImprovementCandidateFinderTest {
         for (Facility f : List.of(a, b)) {
             CandidateResult r = find(f, "19:00", "21:00");
 
-            assertThat(r.candidates()).isEmpty();
+            assertThat(r.candidates()).hasSize(1);
+            Candidate c = r.candidates().get(0);
+            assertThat(c.selectedSchedule().state()).isEqualTo("UNKNOWN");
+            assertThat(c.availability().status()).isEqualTo("UNKNOWN");
+            assertThat(c.availability().unavailableIntervals()).isNull(); // 휴관으로 추측하지 않는다
+            assertThat(c.currentCloseMin()).isNull();
+            assertThat(c.extendable()).isFalse();
             assertThat(r.unknownSpaceCount()).isEqualTo(1);
         }
     }
 
     @Test
-    void ALWAYS_OPEN은_후보도_unknown_집계도_아니다() {
+    void ALWAYS_OPEN은_항상_이용_가능한_DEFAULT_공간이고_unknown_집계가_아니다() {
         Facility f = facility(AccessType.ALWAYS_OPEN);
         space(f, SpaceType.DEFAULT, "시설 전체");
 
         CandidateResult r = find(f, "19:00", "21:00");
 
-        assertThat(r.candidates()).isEmpty();
+        assertThat(r.candidates()).hasSize(1);
+        Candidate c = r.candidates().get(0);
+        assertThat(c.spaceType()).isEqualTo(SpaceType.DEFAULT);
+        assertThat(c.availability().status()).isEqualTo("AVAILABLE");
+        assertThat(c.availability().basis()).isEqualTo("ACCESS_TYPE");
+        assertThat(c.selectedSchedule().intervals().get(0).closeTime()).isEqualTo("24:00");
+        assertThat(c.extendable()).isFalse();
         assertThat(r.unknownSpaceCount()).isZero();
     }
 
@@ -160,7 +179,7 @@ class ImprovementCandidateFinderTest {
     }
 
     @Test
-    void 종합자료실만_닫혀_있으면_열람실은_제외하고_종합자료실만_후보다() {
+    void 종합자료실만_닫혀_있어도_열람실까지_모든_공간이_상태와_함께_나온다() {
         Facility f = facility(AccessType.OPEN_HOURS);
         space(f, SpaceType.GENERAL, "종합자료실");
         space(f, SpaceType.READING, "열람실");
@@ -169,8 +188,24 @@ class ImprovementCandidateFinderTest {
 
         List<Candidate> list = find(f, "19:00", "21:00").candidates();
 
-        assertThat(list).hasSize(1);
-        assertThat(list.get(0).spaceType()).isEqualTo(SpaceType.GENERAL);
+        assertThat(list).extracting(Candidate::spaceType).containsExactly(SpaceType.GENERAL, SpaceType.READING);
+        assertThat(list).extracting(c -> c.availability().status()).containsExactly("UNAVAILABLE", "AVAILABLE");
+        assertThat(list.get(0).extendable()).isTrue();
+        assertThat(list.get(1).extendable()).isFalse();
+    }
+
+    @Test
+    void 요일별_스케줄은_공간별_7일이고_행이_없는_요일은_UNKNOWN이다() {
+        Facility f = facility(AccessType.OPEN_HOURS);
+        space(f, SpaceType.GENERAL, "종합자료실");
+        open(f, SpaceType.GENERAL, 1, 540, 1080); // 화요일만 있음
+
+        var weekly = finder.weeklyHours(f.getFacilityId());
+
+        assertThat(weekly).containsOnlyKeys(SpaceType.GENERAL);
+        assertThat(weekly.get(SpaceType.GENERAL)).hasSize(7);
+        assertThat(weekly.get(SpaceType.GENERAL).get(1).state()).isEqualTo("OPEN");
+        assertThat(weekly.get(SpaceType.GENERAL).get(0).state()).isEqualTo("UNKNOWN");
     }
 
     @Test
