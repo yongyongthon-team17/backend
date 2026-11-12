@@ -19,17 +19,35 @@ final class BusStopCounter {
     record Stop(double lat, double lng) {
     }
 
+    /** 이름에 이 표기가 있는 정류장은 노선이 서지 않는 곳이라 세지 않는다(팀 결정). */
+    static final String NON_STOP_MARK = "(미정차)";
+
     private final List<Stop> stops;
+    private final int excludedNonStop;
 
     BusStopCounter(List<Stop> stops) {
-        this.stops = stops;
+        this(stops, 0);
     }
 
-    /** bus_stops.csv 행(stop_id, latitude, longitude)에서 만든다. 좌표가 잘못된 행과 중복 stop_id는 버린다. */
+    private BusStopCounter(List<Stop> stops, int excludedNonStop) {
+        this.stops = stops;
+        this.excludedNonStop = excludedNonStop;
+    }
+
+    /**
+     * bus_stops.csv 행(stop_id, name, latitude, longitude)에서 만든다.
+     * 이름에 "(미정차)"가 있는 정류장, 좌표가 잘못된 행, 중복 stop_id는 버린다. name 열이 없으면 일반 정류장으로 본다.
+     */
     static BusStopCounter fromRows(List<Map<String, String>> rows) {
         Set<String> seen = new HashSet<>();
         List<Stop> stops = new ArrayList<>();
+        int excluded = 0;
         for (Map<String, String> r : rows) {
+            // 제외한 행의 stop_id가 다른 행의 중복 판정에 영향을 주지 않게, 중복 검사보다 먼저 거른다
+            if (s(r, "name").contains(NON_STOP_MARK)) {
+                excluded++;
+                continue;
+            }
             String id = s(r, "stop_id");
             Double lat = EtlUtil.toDouble(s(r, "latitude"));
             Double lng = EtlUtil.toDouble(s(r, "longitude"));
@@ -38,11 +56,16 @@ final class BusStopCounter {
             }
             stops.add(new Stop(lat, lng));
         }
-        return new BusStopCounter(stops);
+        return new BusStopCounter(stops, excluded);
     }
 
     boolean isEmpty() {
         return stops.isEmpty();
+    }
+
+    /** "(미정차)"라서 세지 않은 정류장 수(적재 로그용) */
+    int excludedNonStop() {
+        return excludedNonStop;
     }
 
     /** 반경 500m 이내 정류장 수. 0은 '확인 결과 0곳'이다. 정류장 자료가 비어 있으면 호출 쪽이 계산하지 않는다 (R14). */
