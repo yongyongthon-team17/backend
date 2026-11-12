@@ -2,7 +2,9 @@ package com.jigeumgayong.backend.facility.service;
 
 import com.jigeumgayong.backend.facility.domain.DayState;
 import com.jigeumgayong.backend.facility.domain.OperatingHour;
+import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.Availability;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.DaySchedule;
+import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.Gap;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.TimeInterval;
 import com.jigeumgayong.backend.facility.service.TimeCoverage.Span;
 import java.util.ArrayList;
@@ -45,5 +47,26 @@ final class OperatingHours {
         }
         boolean closed = rows.stream().anyMatch(h -> h.getDayState() == DayState.CLOSED);
         return new DaySchedule(day, closed ? "CLOSED" : "UNKNOWN", List.of());
+    }
+
+    /**
+     * 선택 요일 스케줄과 희망 구간으로 공간의 이용 상태를 정한다 (A03과 같은 규칙).
+     * OPEN: 운영 구간이 희망 구간을 빈틈없이 덮으면 AVAILABLE, 아니면 UNAVAILABLE(빈 구간 목록).
+     * CLOSED(고정 휴관): UNAVAILABLE, 요청 전체가 빈 구간. UNKNOWN: 휴관으로 추측하지 않고 UNKNOWN(빈 구간 null).
+     */
+    static Availability availability(DaySchedule schedule, List<OperatingHour> rows, int start, int end,
+                                     boolean requiresReservation) {
+        return switch (schedule.state()) {
+            case "OPEN" -> {
+                List<Gap> gaps = TimeCoverage.findGaps(openSpans(rows), start, end).stream()
+                        .map(g -> new Gap(TimeText.format(g.open()), TimeText.format(g.close())))
+                        .toList();
+                yield new Availability(gaps.isEmpty() ? "AVAILABLE" : "UNAVAILABLE", "WEEKLY_SCHEDULE",
+                        requiresReservation, gaps);
+            }
+            case "CLOSED" -> new Availability("UNAVAILABLE", "WEEKLY_SCHEDULE", requiresReservation,
+                    List.of(new Gap(TimeText.format(start), TimeText.format(end))));
+            default -> new Availability("UNKNOWN", "WEEKLY_SCHEDULE", requiresReservation, null);
+        };
     }
 }

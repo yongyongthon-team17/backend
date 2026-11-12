@@ -52,9 +52,9 @@ class FacilitySearchControllerTest {
                 new DaySchedule(1, "OPEN", List.of(new TimeInterval("09:00", "22:00"))),
                 new Availability("AVAILABLE", "WEEKLY_SCHEDULE", false, List.of()));
         var item = new Item("101", 1, "도서관", "수지구", "OPEN_HOURS", "예시 공공도서관", "주소", null,
-                new Coordinates(new BigDecimal("37.32"), new BigDecimal("127.1")), null, List.of(space));
+                new Coordinates(new BigDecimal("37.32"), new BigDecimal("127.1")), null, "AVAILABLE", List.of(space));
         return new FacilitySearchResponse(
-                new Criteria(null, "수지구", List.of(1), 1, "19:00", "21:00"), List.of(item), 1, 1, 0);
+                new Criteria(null, "수지구", List.of(1), 1, "19:00", "21:00"), List.of(item), 1, 1, 1, 0);
     }
 
     @Test
@@ -75,7 +75,9 @@ class FacilitySearchControllerTest {
                         .value("22:00"))
                 .andExpect(jsonPath("$.data.items[0].availableSpaces[0].availability.unavailableIntervals")
                         .isEmpty())
+                .andExpect(jsonPath("$.data.items[0].availabilityStatus").value("AVAILABLE"))
                 .andExpect(jsonPath("$.data.totalCount").value(1))
+                .andExpect(jsonPath("$.data.availableCount").value(1))
                 .andExpect(jsonPath("$.data.matchedSpaceCount").value(1))
                 .andExpect(jsonPath("$.data.unknownSpaceCount").value(0))
                 .andExpect(jsonPath("$.meta.requestId").value("req-a02"))
@@ -87,7 +89,7 @@ class FacilitySearchControllerTest {
     void no_result_is_200_with_empty_items() throws Exception {
         when(service.search(any(), any(), any(), anyInt(), anyString(), anyString()))
                 .thenReturn(new FacilitySearchResponse(
-                        new Criteria(null, null, List.of(), 0, "10:00", "12:00"), List.of(), 0, 0, 0));
+                        new Criteria(null, null, List.of(), 0, "10:00", "12:00"), List.of(), 0, 0, 0, 0));
 
         mvc.perform(get(URL).param("dayOfWeek", "0").param("startTime", "10:00").param("endTime", "12:00"))
                 .andExpect(status().isOk())

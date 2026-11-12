@@ -79,18 +79,59 @@ class FacilitySearchIntegrationTest {
                 .andExpect(jsonPath("$.data.items[0].imageUrl").value((Object) null))
                 .andExpect(jsonPath("$.data.items[0].distanceMeters").value((Object) null))
                 .andExpect(jsonPath("$.data.items[0].coordinates.latitude").value(37.322345))
-                .andExpect(jsonPath("$.data.items[0].availableSpaces.length()").value(1))
-                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].spaceType").value("READING"))
-                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].selectedSchedule.state").value("OPEN"))
-                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].selectedSchedule.intervals.length()")
+                .andExpect(jsonPath("$.data.items[0].availabilityStatus").value("AVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces.length()").value(2))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].spaceType").value("GENERAL"))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].availability.status").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].availability.unavailableIntervals[0].startTime")
+                        .value("19:00"))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[1].spaceType").value("READING"))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[1].selectedSchedule.state").value("OPEN"))
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[1].selectedSchedule.intervals.length()")
                         .value(2))
-                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].selectedSchedule.intervals[1].closeTime")
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[1].selectedSchedule.intervals[1].closeTime")
                         .value("22:00"))
-                .andExpect(jsonPath("$.data.items[0].availableSpaces[0].availability.basis")
+                .andExpect(jsonPath("$.data.items[0].availableSpaces[1].availability.basis")
                         .value("WEEKLY_SCHEDULE"))
                 .andExpect(jsonPath("$.data.totalCount").value(1))
+                .andExpect(jsonPath("$.data.availableCount").value(1))
                 .andExpect(jsonPath("$.data.matchedSpaceCount").value(1))
                 .andExpect(jsonPath("$.meta.warnings[0].code").value("WEEKLY_SCHEDULE_ONLY"));
+    }
+
+    @Test
+    void unavailable_and_unknown_facilities_are_returned_with_status_and_sorted_last() throws Exception {
+        FacilityType t = typeRepository.findById(typeId).orElseThrow();
+        // 화요일(1) 19~21시 기준: 18시 마감 → 이용 불가, 운영시간 행 없음 → 확인 필요
+        Facility early = facilityRepository.save(Facility.builder().type(t).sourceType(SourceType.MANUAL)
+                .sourceKey("it-4").district("수지구").accessType(AccessType.OPEN_HOURS)
+                .name("일찍닫는곳").address("용인시 수지구").latitude(new BigDecimal("37.3"))
+                .longitude(new BigDecimal("127.1")).build());
+        spaceRepository.save(new FacilitySpace(early.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+        hourRepository.save(OperatingHour.builder().facilityId(early.getFacilityId()).spaceType(SpaceType.DEFAULT)
+                .dayOfWeek((short) 1).dayState(DayState.OPEN).openMin((short) 540).closeMin((short) 1080).build());
+        Facility unknown = facilityRepository.save(Facility.builder().type(t).sourceType(SourceType.MANUAL)
+                .sourceKey("it-5").district("수지구").accessType(AccessType.OPEN_HOURS)
+                .name("시간모르는곳").address("용인시 수지구").latitude(new BigDecimal("37.3"))
+                .longitude(new BigDecimal("127.1")).build());
+        spaceRepository.save(new FacilitySpace(unknown.getFacilityId(), SpaceType.DEFAULT, "시설 전체"));
+
+        mvc.perform(get("/api/v1/facilities").param("district", "수지구")
+                        .param("dayOfWeek", "1").param("startTime", "19:00").param("endTime", "21:00"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.totalCount").value(3))
+                .andExpect(jsonPath("$.data.availableCount").value(1))
+                .andExpect(jsonPath("$.data.items[0].availabilityStatus").value("AVAILABLE"))
+                .andExpect(jsonPath("$.data.items[1].name").value("일찍닫는곳"))
+                .andExpect(jsonPath("$.data.items[1].availabilityStatus").value("UNAVAILABLE"))
+                .andExpect(jsonPath("$.data.items[1].availableSpaces[0].availability.unavailableIntervals[0].endTime")
+                        .value("21:00"))
+                .andExpect(jsonPath("$.data.items[2].name").value("시간모르는곳"))
+                .andExpect(jsonPath("$.data.items[2].availabilityStatus").value("UNKNOWN"))
+                .andExpect(jsonPath("$.data.items[2].availableSpaces[0].availability.status").value("UNKNOWN"))
+                .andExpect(jsonPath("$.data.items[2].availableSpaces[0].availability.unavailableIntervals")
+                        .value((Object) null))
+                .andExpect(jsonPath("$.data.unknownSpaceCount").value(1));
     }
 
     @Test
