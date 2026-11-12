@@ -60,4 +60,50 @@ class BusStopCounterTest {
     void 정류장_자료가_비어_있으면_isEmpty이다() {
         assertThat(BusStopCounter.fromRows(List.of()).isEmpty()).isTrue();
     }
+
+    private static Map<String, String> named(String id, String name, double lat, double lng) {
+        return Map.of("stop_id", id, "name", name, "latitude", String.valueOf(lat), "longitude", String.valueOf(lng));
+    }
+
+    @Test
+    void 이름에_미정차가_있는_정류장은_세지_않는다() {
+        BusStopCounter counter = BusStopCounter.fromRows(List.of(
+                named("A", "버드실사거리", LAT + 0.0009, LNG),
+                named("B", "백암터미널(미정차)", LAT + 0.0018, LNG),
+                named("C", "구성중학교", LAT + 0.0027, LNG)));
+
+        assertThat(counter.countWithin(LAT, LNG)).isEqualTo(2);
+        assertThat(counter.excludedNonStop()).isEqualTo(1);
+    }
+
+    @Test
+    void 이름이_없거나_다른_표기는_일반_정류장으로_센다() {
+        BusStopCounter counter = BusStopCounter.fromRows(List.of(
+                row("A", LAT + 0.0009, LNG), // name 열 없음
+                named("B", "정차대", LAT + 0.0018, LNG), // '정차'만 들어간 이름
+                named("C", "(임시)마을회관", LAT + 0.0027, LNG)));
+
+        assertThat(counter.countWithin(LAT, LNG)).isEqualTo(3);
+        assertThat(counter.excludedNonStop()).isZero();
+    }
+
+    @Test
+    void 제외한_행의_stop_id는_다른_행의_중복_판정에_영향을_주지_않는다() {
+        // 같은 id의 미정차 행이 먼저 와도, 뒤에 오는 일반 정류장은 센다
+        BusStopCounter counter = BusStopCounter.fromRows(List.of(
+                named("A", "가곡마을회관(미정차)", LAT + 0.0009, LNG),
+                named("A", "가곡마을회관", LAT + 0.0009, LNG)));
+
+        assertThat(counter.countWithin(LAT, LNG)).isEqualTo(1);
+        assertThat(counter.excludedNonStop()).isEqualTo(1);
+    }
+
+    @Test
+    void 미정차만_있으면_정류장_자료가_비어_있는_것으로_본다() {
+        BusStopCounter counter = BusStopCounter.fromRows(List.of(
+                named("A", "내기삼거리(미정차)", LAT + 0.0009, LNG)));
+
+        assertThat(counter.isEmpty()).isTrue();
+        assertThat(counter.excludedNonStop()).isEqualTo(1);
+    }
 }
