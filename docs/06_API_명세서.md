@@ -400,6 +400,12 @@ facilityId 시설의 공간 중 희망 시간에 UNAVAILABLE인 공간을 찾는
 - 한 요청의 새 생성 한도(설정값 10건, 캐시 HIT 제외)는 코드에 남아 있지만, 시설 하나의 공간이 최대 3개라 현재 구조에서는 걸리지 않는다. 따라서 proposalReason "이번 요청의 생성 한도 초과"는 현재 구조에서는 발생하지 않음.
 - LLM 호출당 20초, 요청 전체 30초 제한. 전체 시간을 넘으면 남은 항목은 UNAVAILABLE. 항목당 LLM 호출은 1번이며 재시도하지 않는다.
 
+#### 일반 보완 제안 (선택 설정) [구현]
+
+- 시설의 부족한 점(관찰)이 하나도 없으면 기본은 LLM을 부르지 않고 `proposalStatus: UNAVAILABLE`, 문구 "현재 확인된 개선 사항이 없습니다."를 준다.
+- 설정 `app.analysis.general-suggestion.enabled=true`(환경 변수 `APP_ANALYSIS_GENERAL_SUGGESTION_ENABLED`, 기본 false)이면 서버가 관찰 `GENERAL_REVIEW`(id `O1`) 하나를 만들어 넣고 일반 흐름대로 LLM이 제안을 만든다. 근거 id·숫자·금지 표현 검증, 캐시, 호출 한도는 기존과 같다.
+- 관찰이 없던 시설도 AI 호출이 생기므로 크레딧이 더 든다. 응답 모양은 바뀌지 않는다(GENERATED이면 대안·통합 문장이 채워짐).
+
 #### AI 호출 한도 [구현]
 
 OpenAI 크레딧 소진을 막기 위한 서버 메모리 기반 한도다(PR #16).
