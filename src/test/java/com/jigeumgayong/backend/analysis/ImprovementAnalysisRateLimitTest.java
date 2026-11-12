@@ -110,22 +110,30 @@ class ImprovementAnalysisRateLimitTest {
     }
 
     @Test
-    void 한도_안에서는_모두_생성하고_초과한_항목만_RATE_LIMITED로_응답한다() {
-        facility(1080, SpaceType.values()); // 한 시설의 공간 3개가 모두 후보, 한도 2건
+    void 시설당_LLM은_한_번만_호출하고_한도도_한_건만_소모한다() {
+        facility(1080, SpaceType.values()); // 한 시설의 공간 3개가 모두 분석 대상, 한도 2건
         ClientKey me = newPerson();
 
         AnalysisResult r = run(me, "19:00", "21:00");
 
         List<ImprovementItem> items = r.data().items();
         assertThat(items).hasSize(3);
-        assertThat(items.stream().filter(i -> "GENERATED".equals(i.proposalStatus()))).hasSize(2);
-        List<ImprovementItem> limited = items.stream().filter(i -> "UNAVAILABLE".equals(i.proposalStatus())).toList();
-        assertThat(limited).hasSize(1);
-        assertThat(limited.get(0).proposalReason()).contains("AI 호출 한도를 초과했습니다").contains("초 후 다시 시도");
-        assertThat(limited.get(0).cache().status()).isEqualTo("UNAVAILABLE");
-        assertThat(codes(r)).contains("RATE_LIMITED");
-        assertThat(llm.calls.get()).isEqualTo(2); // 한도에 걸린 항목은 OpenAI를 호출하지 않는다
-        assertThat(r.retryAfterSeconds()).isNotNull().isBetween(1L, 180L);
+        assertThat(items).allMatch(i -> "GENERATED".equals(i.proposalStatus()));
+        assertThat(codes(r)).doesNotContain("RATE_LIMITED");
+        assertThat(llm.calls.get()).isEqualTo(1); // 공간이 3개여도 시설 하나는 LLM 1회
+        assertThat(r.retryAfterSeconds()).isNull();
+
+        // 한도 2건 중 1건만 썼으므로 새 조건 1건이 더 가능하고, 그다음에 시설의 모든 항목이 막힌다
+        assertThat(run(me, "20:00", "22:00").data().items()).allMatch(i -> "GENERATED".equals(i.proposalStatus()));
+        AnalysisResult blocked = run(me, "21:00", "23:00");
+        assertThat(blocked.data().items()).hasSize(3);
+        assertThat(blocked.data().items()).allMatch(i -> "UNAVAILABLE".equals(i.proposalStatus()));
+        assertThat(blocked.data().items().get(0).proposalReason())
+                .contains("AI 호출 한도를 초과했습니다").contains("초 후 다시 시도");
+        assertThat(blocked.data().items().get(0).cache().status()).isEqualTo("UNAVAILABLE");
+        assertThat(codes(blocked)).contains("RATE_LIMITED");
+        assertThat(llm.calls.get()).isEqualTo(2); // 한도에 걸린 요청은 OpenAI를 호출하지 않는다
+        assertThat(blocked.retryAfterSeconds()).isNotNull().isBetween(1L, 180L);
     }
 
     @Test
@@ -180,12 +188,16 @@ class ImprovementAnalysisRateLimitTest {
     }
 
     @Test
-    void 후보가_없거나_한도_미만이면_Retry_After_정보가_없다() {
-        facility(1320, SpaceType.DEFAULT); // 22시까지 운영 → 19-21시 후보 없음
+    void 부족한_점이_없으면_LLM도_한도도_쓰지_않고_Retry_After_정보가_없다() {
+        facility(1320, SpaceType.DEFAULT); // 22시까지 운영 → 19-21시 이용 가능, 다른 부족한 점 없음
+        ClientKey me = newPerson();
 
-        AnalysisResult none = run(newPerson(), "19:00", "21:00");
+        AnalysisResult none = run(me, "19:00", "21:00");
 
-        assertThat(none.data().items()).isEmpty();
+        assertThat(none.data().items()).hasSize(1);
+        assertThat(none.data().items().get(0).proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
         assertThat(none.retryAfterSeconds()).isNull();
+        assertThat(llm.calls.get()).isZero();
+        assertThat(codes(none)).doesNotContain("RATE_LIMITED");
     }
 }

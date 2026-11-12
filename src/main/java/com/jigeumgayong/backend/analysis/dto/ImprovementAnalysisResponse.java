@@ -48,7 +48,10 @@ public record ImprovementAnalysisResponse(
     public record CacheInfo(String status, OffsetDateTime createdAt) {
     }
 
-    /** status: COMPLETE(교통 AVAILABLE + 문장에 정류장 수 포함) / PARTIAL / UNAVAILABLE. 응답 시 판정하며 DB에 저장하지 않는다 */
+    /**
+     * status: COMPLETE(교통 AVAILABLE + 문장에 정류장 수 포함) / PARTIAL / UNAVAILABLE. 응답 시 판정하며 DB에 저장하지 않는다.
+     * 같은 시설의 항목들은 같은 문장을 갖는다. 부족한 점이 없어 LLM을 부르지 않은 경우 UNAVAILABLE이지만 text에 고정 문구가 있다.
+     */
     public record IntegratedSuggestion(String status, String text) {
     }
 

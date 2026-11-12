@@ -145,7 +145,7 @@ class CorsIntegrationTest {
 
 	@Test
 	void post_has_cors_headers() throws Exception {
-		// A04는 facilityId 필수. ALWAYS_OPEN 시설은 후보 0건이라 LLM을 호출하지 않는다
+		// A04는 facilityId 필수. ALWAYS_OPEN 시설은 부족한 점(관찰)이 없어 LLM을 호출하지 않는다
 		FacilityType type = typeRepository.save(FacilityType.builder().name("cors-type")
 				.chipGroup(ChipGroup.SPORTS).build());
 		Facility f = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
@@ -158,7 +158,7 @@ class CorsIntegrationTest {
 									+ "\",\"criteria\":{\"dayOfWeek\":1,\"startTime\":\"19:00\",\"endTime\":\"21:00\"}}"))
 					.andExpect(status().isOk())
 					.andExpect(header().string(ACAO, ALLOWED))
-					.andExpect(jsonPath("$.data.candidateCount").value(0));
+					.andExpect(jsonPath("$.data.candidateCount").value(1));
 		} finally {
 			facilityRepository.delete(f);
 			typeRepository.delete(type);

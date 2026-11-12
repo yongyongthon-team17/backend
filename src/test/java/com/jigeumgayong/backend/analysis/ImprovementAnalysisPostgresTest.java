@@ -114,11 +114,12 @@ class ImprovementAnalysisPostgresTest {
         // 문자열 리터럴이 아니라 JSON 객체로 저장됐는지 (CHECK jsonb_typeof(payload)='object'도 통과)
         assertThat(jdbc.queryForObject("select jsonb_typeof(payload) from ai_analysis", String.class))
                 .isEqualTo("object");
-        assertThat(jdbc.queryForObject("select payload->>'proposedCloseMin' from ai_analysis", String.class))
-                .isEqualTo("1260");
-        assertThat(jdbc.queryForObject("select jsonb_typeof(payload->'alternatives') from ai_analysis", String.class))
+        assertThat(jdbc.queryForObject("select payload->'spaces'->0->>'proposedCloseMin' from ai_analysis",
+                String.class)).isEqualTo("1260");
+        assertThat(jdbc.queryForObject("select jsonb_typeof(payload->'spaces') from ai_analysis", String.class))
                 .isEqualTo("array");
-        assertThat(jdbc.queryForObject("select space_type from ai_analysis", String.class)).isEqualTo("GENERAL");
+        // 시설 단위 행이라 space_type은 비어 있다
+        assertThat(jdbc.queryForObject("select space_type from ai_analysis", String.class)).isNull();
         assertThat(jdbc.queryForObject("select length(source_hash) from ai_analysis", Integer.class)).isEqualTo(64);
     }
 
@@ -131,7 +132,7 @@ class ImprovementAnalysisPostgresTest {
                 .scopeKey(existing.getScopeKey()).analysisType(AnalysisType.IMPROVEMENT)
                 .paramsKey(existing.getParamsKey()).facilityId(existing.getFacilityId())
                 .spaceType(existing.getSpaceType()).payload(existing.getPayload())
-                .sourceHash(existing.getSourceHash()).promptVersion("imp-v2").build()))
+                .sourceHash(existing.getSourceHash()).promptVersion("imp-v3").build()))
                 .isInstanceOf(DataIntegrityViolationException.class);
 
         AiAnalysis found = aiRepository.findByScopeKeyAndAnalysisTypeAndParamsKey(
@@ -181,9 +182,9 @@ class ImprovementAnalysisPostgresTest {
     void 존재하지_않는_공간의_결과는_복합_FK로_거부된다() {
         assertThatThrownBy(() -> aiRepository.saveAndFlush(AiAnalysis.builder()
                 .scopeKey("FAC:" + facility.getFacilityId()).analysisType(AnalysisType.IMPROVEMENT)
-                .paramsKey("S:READING|D:1|T:1140-1260").facilityId(facility.getFacilityId())
+                .paramsKey("D:1|T:1140-1260").facilityId(facility.getFacilityId())
                 .spaceType(SpaceType.READING) // 이 시설엔 READING 공간이 없다
-                .payload("{\"a\":1}").sourceHash("a".repeat(64)).promptVersion("imp-v2").build()))
+                .payload("{\"a\":1}").sourceHash("a".repeat(64)).promptVersion("imp-v3").build()))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 }

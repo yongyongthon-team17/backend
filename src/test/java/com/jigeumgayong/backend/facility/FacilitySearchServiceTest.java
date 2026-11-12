@@ -90,12 +90,19 @@ class FacilitySearchServiceTest {
         FacilitySearchResponse r = search(null, null, null, "19:00", "21:00");
 
         assertThat(r.totalCount()).isEqualTo(1);
+        assertThat(r.availableCount()).isEqualTo(1);
         assertThat(r.matchedSpaceCount()).isEqualTo(1);
         Item item = r.items().get(0);
-        assertThat(item.availableSpaces()).hasSize(1);
-        assertThat(item.availableSpaces().get(0).spaceType()).isEqualTo("READING");
-        assertThat(item.availableSpaces().get(0).selectedSchedule().intervals().get(0).closeTime())
-                .isEqualTo("22:00");
+        assertThat(item.availabilityStatus()).isEqualTo("AVAILABLE"); // 공간 하나라도 이용 가능하면 시설은 이용 가능
+        assertThat(item.availableSpaces()).extracting("spaceType").containsExactly("GENERAL", "READING");
+        var general = item.availableSpaces().get(0);
+        assertThat(general.availability().status()).isEqualTo("UNAVAILABLE");
+        assertThat(general.availability().unavailableIntervals()).hasSize(1);
+        assertThat(general.availability().unavailableIntervals().get(0).startTime()).isEqualTo("19:00");
+        assertThat(general.availability().unavailableIntervals().get(0).endTime()).isEqualTo("21:00");
+        var reading = item.availableSpaces().get(1);
+        assertThat(reading.availability().status()).isEqualTo("AVAILABLE");
+        assertThat(reading.selectedSchedule().intervals().get(0).closeTime()).isEqualTo("22:00");
         assertThat(item.distanceMeters()).isNull();
         assertThat(item.facilityId()).isEqualTo(String.valueOf(f.getFacilityId()));
     }
@@ -116,8 +123,9 @@ class FacilitySearchServiceTest {
 
         FacilitySearchResponse r = search(null, null, null, "10:00", "17:00");
 
-        assertThat(r.items()).hasSize(1);
-        assertThat(r.items().get(0).name()).isEqualTo("A도서관");
+        assertThat(r.items()).extracting(Item::name).containsExactly("A도서관", "B도서관");
+        assertThat(r.items()).extracting(Item::availabilityStatus).containsExactly("AVAILABLE", "UNAVAILABLE");
+        assertThat(r.availableCount()).isEqualTo(1);
         assertThat(r.items().get(0).availableSpaces()).extracting("spaceType")
                 .containsExactly("GENERAL", "READING");
     }
@@ -135,13 +143,20 @@ class FacilitySearchServiceTest {
 
         FacilitySearchResponse r = search(null, null, null, "10:00", "17:00");
 
-        assertThat(r.items()).extracting(Item::name).containsExactly("이어짐");
+        assertThat(r.items()).extracting(Item::name).containsExactly("이어짐", "점심휴게");
+        assertThat(r.items().get(0).availabilityStatus()).isEqualTo("AVAILABLE");
         assertThat(r.items().get(0).availableSpaces().get(0).selectedSchedule().intervals()).hasSize(2);
+        var lunch = r.items().get(1);
+        assertThat(lunch.availabilityStatus()).isEqualTo("UNAVAILABLE");
+        var lunchGap = lunch.availableSpaces().get(0).availability().unavailableIntervals();
+        assertThat(lunchGap).hasSize(1);
+        assertThat(lunchGap.get(0).startTime()).isEqualTo("12:00");
+        assertThat(lunchGap.get(0).endTime()).isEqualTo("13:00");
         assertThat(r.unknownSpaceCount()).isZero();
     }
 
     @Test
-    void closed_is_excluded_without_unknown_count_and_missing_rows_count_as_unknown() {
+    void closed_is_unavailable_and_unknown_or_missing_rows_are_unknown_not_closed() {
         Facility closed = facility(library, "수지구", AccessType.OPEN_HOURS, "휴관", "주소");
         space(closed, SpaceType.DEFAULT, "시설 전체");
         state(closed, SpaceType.DEFAULT, MON, DayState.CLOSED);
@@ -158,7 +173,18 @@ class FacilitySearchServiceTest {
 
         FacilitySearchResponse r = search(null, null, null, "10:00", "12:00");
 
-        assertThat(r.items()).extracting(Item::name).containsExactly("혼합");
+        // 이용 가능 → 이용 불가 → 확인 필요 순, 같은 상태 안에서는 facilityId 순
+        assertThat(r.items()).extracting(Item::name).containsExactly("혼합", "휴관", "UNKNOWN상태", "행없음");
+        assertThat(r.items()).extracting(Item::availabilityStatus)
+                .containsExactly("AVAILABLE", "UNAVAILABLE", "UNKNOWN", "UNKNOWN");
+        var closedItem = r.items().get(1).availableSpaces().get(0);
+        assertThat(closedItem.selectedSchedule().state()).isEqualTo("CLOSED");
+        assertThat(closedItem.availability().unavailableIntervals().get(0).startTime()).isEqualTo("10:00");
+        var unknownItem = r.items().get(2).availableSpaces().get(0);
+        assertThat(unknownItem.availability().status()).isEqualTo("UNKNOWN");
+        assertThat(unknownItem.availability().unavailableIntervals()).isNull(); // 휴관으로 추측하지 않는다
+        assertThat(r.totalCount()).isEqualTo(4);
+        assertThat(r.availableCount()).isEqualTo(1);
         assertThat(r.unknownSpaceCount()).isEqualTo(3); // UNKNOWN상태 + 행없음 + 혼합의 READING
     }
 
@@ -224,10 +250,43 @@ class FacilitySearchServiceTest {
 
         assertThat(r.items()).isEmpty();
         assertThat(r.totalCount()).isZero();
+        assertThat(r.availableCount()).isZero();
         assertThat(r.matchedSpaceCount()).isZero();
         assertThat(r.unknownSpaceCount()).isZero();
         assertThat(r.criteria().facilityTypeIds()).isEmpty();
         assertThat(r.criteria().startTime()).isEqualTo("19:00");
+    }
+
+    @Test
+    void items_are_sorted_available_then_unavailable_then_unknown_and_counted() {
+        // 일부러 확인 필요 → 이용 불가 → 이용 가능 순으로 만든다
+        Facility unknown = facility(library, "수지구", AccessType.OPEN_HOURS, "A모름", "주소");
+        space(unknown, SpaceType.DEFAULT, "시설 전체");
+        Facility closedEarly = facility(library, "수지구", AccessType.OPEN_HOURS, "B일찍닫음", "주소");
+        space(closedEarly, SpaceType.DEFAULT, "시설 전체");
+        open(closedEarly, SpaceType.DEFAULT, MON, 1, 540, 1080);
+        Facility ok = facility(library, "수지구", AccessType.OPEN_HOURS, "C가능", "주소");
+        space(ok, SpaceType.DEFAULT, "시설 전체");
+        open(ok, SpaceType.DEFAULT, MON, 1, 540, 1320);
+
+        FacilitySearchResponse r = search(null, null, null, "19:00", "21:00");
+
+        assertThat(r.items()).extracting(Item::name).containsExactly("C가능", "B일찍닫음", "A모름");
+        assertThat(r.totalCount()).isEqualTo(3);
+        assertThat(r.availableCount()).isEqualTo(1);
+        assertThat(r.matchedSpaceCount()).isEqualTo(1);
+    }
+
+    @Test
+    void facility_without_any_space_is_returned_as_unknown() {
+        facility(library, "수지구", AccessType.OPEN_HOURS, "공간없음", "주소");
+
+        FacilitySearchResponse r = search(null, null, null, "10:00", "12:00");
+
+        assertThat(r.items()).hasSize(1);
+        assertThat(r.items().get(0).availabilityStatus()).isEqualTo("UNKNOWN");
+        assertThat(r.items().get(0).availableSpaces()).isEmpty();
+        assertThat(r.availableCount()).isZero();
     }
 
     @Test
@@ -277,20 +336,22 @@ class FacilitySearchServiceTest {
     }
 
     @Test
-    void reservation_outside_hours_is_excluded() {
+    void reservation_outside_hours_is_unavailable_with_reservation_flag() {
         Facility rsv = facility(sports, "기흥구", AccessType.RESERVATION, "예약 체육관", "주소");
         space(rsv, SpaceType.DEFAULT, "시설 전체");
         open(rsv, SpaceType.DEFAULT, MON, 1, 540, 1080);
 
         FacilitySearchResponse r = search(null, null, null, "19:00", "21:00");
 
-        assertThat(r.items()).isEmpty();
-        assertThat(r.totalCount()).isZero();
+        assertThat(r.items()).hasSize(1);
+        assertThat(r.items().get(0).availabilityStatus()).isEqualTo("UNAVAILABLE");
+        assertThat(r.items().get(0).availableSpaces().get(0).availability().requiresReservation()).isTrue();
+        assertThat(r.availableCount()).isZero();
         assertThat(r.unknownSpaceCount()).isZero(); // 시간이 안 맞는 것은 UNKNOWN이 아니다
     }
 
     @Test
-    void reservation_unknown_space_is_counted() {
+    void reservation_unknown_space_is_returned_as_unknown_and_counted() {
         Facility noRows = facility(sports, "기흥구", AccessType.RESERVATION, "행없는 예약 체육관", "주소");
         space(noRows, SpaceType.DEFAULT, "시설 전체");
         Facility unknown = facility(sports, "기흥구", AccessType.RESERVATION, "UNKNOWN 예약 체육관", "주소");
@@ -299,7 +360,8 @@ class FacilitySearchServiceTest {
 
         FacilitySearchResponse r = search(null, null, null, "10:00", "12:00");
 
-        assertThat(r.items()).isEmpty();
+        assertThat(r.items()).extracting(Item::availabilityStatus).containsExactly("UNKNOWN", "UNKNOWN");
+        assertThat(r.availableCount()).isZero();
         assertThat(r.unknownSpaceCount()).isEqualTo(2);
     }
 
