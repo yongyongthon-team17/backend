@@ -58,6 +58,19 @@ class SeedBuilderTest {
     }
 
     @Test
+    void 실제_정류장_파일의_미정차_144개는_집계에서_제외된다() {
+        assertThat(data.notes()).containsEntry("정류장 집계에서 (미정차) 정류장 제외", 144);
+        // 제외 전 값(영원작은도서관 3개, 그린뜰작은도서관 20개)에서 미정차만큼 줄어든다
+        assertThat(busStopCountOf("영원작은도서관")).isZero();
+        assertThat(busStopCountOf("그린뜰작은도서관")).isEqualTo(16);
+    }
+
+    private static int busStopCountOf(String facilityName) {
+        return data.facilities().stream().filter(f -> facilityName.equals(f.getName())).findFirst()
+                .orElseThrow().getBusStopCount();
+    }
+
+    @Test
     void 모든_시설은_공간이_1개_이상이고_좌표와_행정구가_있다() {
         assertThat(data.facilities()).allSatisfy(f -> {
             assertThat(f.getSpaces()).isNotEmpty();

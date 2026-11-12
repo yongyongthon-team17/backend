@@ -67,6 +67,7 @@ public class SeedBuilder {
 
     /**
      * seed/bus_stops.csv(용인 정류장)로 시설마다 반경 500m 정류장 수를 계산한다.
+     * 이름에 "(미정차)"가 있는 정류장은 세지 않는다.
      * 파일이 없거나 비어 있으면 아무것도 채우지 않는다(null = 미확인, 0으로 대체하지 않음).
      */
     private void applyBusStops(List<SourceFacility> facilities, Map<String, Integer> notes) {
@@ -87,6 +88,9 @@ public class SeedBuilder {
             f.setBusCountedAt(counted);
         }
         notes.put("교통 정보 계산", facilities.size());
+        if (counter.excludedNonStop() > 0) {
+            notes.put("정류장 집계에서 (미정차) 정류장 제외", counter.excludedNonStop());
+        }
     }
 
     /** 좌표가 없는 시설은 geo_cache.csv(주소 → 좌표)에서 채운다. 캐시에도 없으면 좌표 없음으로 격리된다. */
