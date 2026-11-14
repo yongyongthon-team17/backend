@@ -24,7 +24,7 @@ import tools.jackson.databind.json.JsonMapper;
  */
 final class ImprovementPrompt {
 
-    static final String PROMPT_VERSION = "imp-v3";
+    static final String PROMPT_VERSION = "imp-v5";
     static final String SCHEMA_NAME = "improvement_proposal";
     static final JsonMapper MAPPER = JsonMapper.builder().build();
 
@@ -48,6 +48,14 @@ final class ImprovementPrompt {
             9. requiresReservation이 true이면 integratedSuggestion에 "예약 필요"를 반드시 포함합니다.
             10. integratedSuggestion은 시설 전체의 observations를 묶은 종합 문장이며, 근거 id를 integratedBasedOn에 적습니다. 입력에 busStopCount가 있으면 교통 내용을 한 번 포함합니다.
             11. 한국어 존댓말로 씁니다. alternatives의 각 text는 120자 이내, integratedSuggestion은 1~2문장, 200자 이내.
+            12. observations의 PEER_LATER_CLOSING, PEER_OPEN_AT_REQUEST는 같은 행정구의 같은 유형 시설과 비교한 사실입니다.
+                이 비교를 근거로 "비슷한 시설들과 견줘 마감을 늦추거나 희망 시간에 운영하는 방안을 검토할 수 있다"처럼 제안할 수 있습니다.
+                비교 시설의 수·비율·이름은 입력에 없으므로 쓰지 않고, detail에 있는 시각과 "대부분"·"절반 이상" 표현만 씁니다.
+            13. observations의 FLOW_CLOSING, FLOW_SUPPLY_GAP, FLOW_WEEKEND는 경기도 해당 구의 유동인구 통계를 비교한 사실입니다.
+                "경기도 ○○구 유동인구 통계를 비교했을 때 ~시까지는 운영하는 것이 좋아 보입니다"처럼 detail의 지역 표현과 시각을 그대로 인용해 제안할 수 있습니다.
+                유동 인구는 그 구 전체의 통계이므로 시설의 이용자 수나 수요, 이용 증가를 단정하지 말고, 통계의 연도나 수치는 쓰지 않습니다.
+                COMPARED_CLOSING은 같은 행정구 같은 유형 시설의 마감과 유동인구 통계를 함께 비교한 사실이므로, 두 근거를 한 번에 인용해
+                "비슷한 시설들과 경기도 ○○구 유동인구 통계를 비교했을 때 ~시까지는 운영하는 것이 좋아 보입니다"처럼 제안합니다.
             JSON 외의 텍스트는 출력하지 않습니다.
             """;
 

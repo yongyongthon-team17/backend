@@ -20,9 +20,13 @@ import com.jigeumgayong.backend.analysis.service.ImprovementPayload.Context;
 import com.jigeumgayong.backend.analysis.service.ImprovementPayload.SpaceProposal;
 import com.jigeumgayong.backend.analysis.service.ImprovementPrompt.Facts;
 import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.Coordinates;
+import com.jigeumgayong.backend.facility.domain.Facility;
+import com.jigeumgayong.backend.facility.domain.SpaceType;
+import com.jigeumgayong.backend.facility.dto.FacilitySearchResponse.DaySchedule;
 import com.jigeumgayong.backend.facility.service.ImprovementCandidateFinder;
 import com.jigeumgayong.backend.facility.service.ImprovementCandidateFinder.Candidate;
 import com.jigeumgayong.backend.facility.service.ImprovementCandidateFinder.CandidateResult;
+import com.jigeumgayong.backend.facility.service.PeerHoursComparison;
 import com.jigeumgayong.backend.facility.service.SearchCriteriaNormalizer;
 import com.jigeumgayong.backend.facility.service.SearchCriteriaNormalizer.Normalized;
 import com.jigeumgayong.backend.facility.service.TimeText;
@@ -94,13 +98,26 @@ public class ImprovementAnalysisService {
     private final boolean transportLinkEnabled;
     /** app.analysis.general-suggestion.enabled: true이면 부족한 점이 없는 시설도 일반 보완 제안을 LLM으로 만든다(기본 false) */
     private final boolean generalSuggestionEnabled;
+    private final PeerHoursComparison peerComparison;
+    /** app.analysis.peer-comparison.enabled: false이면 같은 구·같은 유형 시설과의 운영시간 비교 관찰을 만들지 않는다(기본 true) */
+    private final boolean peerComparisonEnabled;
+    private final FloatingPopulation flowPopulation;
+    /** app.analysis.flow-statistics.enabled: false이면 경기도 유동인구 통계 비교 관찰(FLOW_*)을 만들지 않는다(기본 true) */
+    private final boolean flowStatisticsEnabled;
 
     public ImprovementAnalysisService(SearchCriteriaNormalizer normalizer, ImprovementCandidateFinder finder,
                                       ImprovementCache cache, LlmClient llm, LlmProperties props,
                                       LlmRateLimiter limiter,
                                       @Qualifier(AnalysisConfig.LLM_EXECUTOR) ExecutorService executor,
+                                      PeerHoursComparison peerComparison, FloatingPopulation flowPopulation,
                                       @Value("${app.analysis.transport-link.enabled:true}") boolean transportLinkEnabled,
-                                      @Value("${app.analysis.general-suggestion.enabled:false}") boolean generalSuggestionEnabled) {
+                                      @Value("${app.analysis.general-suggestion.enabled:false}") boolean generalSuggestionEnabled,
+                                      @Value("${app.analysis.peer-comparison.enabled:true}") boolean peerComparisonEnabled,
+                                      @Value("${app.analysis.flow-statistics.enabled:true}") boolean flowStatisticsEnabled) {
+        this.peerComparison = peerComparison;
+        this.peerComparisonEnabled = peerComparisonEnabled;
+        this.flowPopulation = flowPopulation;
+        this.flowStatisticsEnabled = flowStatisticsEnabled;
         this.normalizer = normalizer;
         this.finder = finder;
         this.cache = cache;
@@ -194,8 +211,12 @@ public class ImprovementAnalysisService {
 
         // 4) 교통(이미 로드된 Facility.busStopCount)과 관찰(부족한 점)을 계산한다
         Accessibility transport = ImprovementTransport.of(spaces.get(0), transportLinkEnabled);
-        List<Observation> observations = ImprovementObservations.build(spaces, finder.weeklyHours(facilityId),
-                transport);
+        Map<SpaceType, List<DaySchedule>> weekly = finder.weeklyHours(facilityId);
+        List<Observation> observations = ImprovementObservations.build(spaces, weekly, transport);
+        if (peerComparisonEnabled || flowStatisticsEnabled) {
+            observations = withComparisonObservations(observations, spaces, weekly, n.startMin(), n.endMin(),
+                    dayOfWeek);
+        }
         String fid = String.valueOf(facilityId);
         addTransportWarning(warnings, transport, fid);
 
@@ -472,6 +493,36 @@ public class ImprovementAnalysisService {
             list.add("예약제 시설입니다. 운영시간만 비교했으며 예약 가능 여부는 판단하지 않습니다.");
         }
         return list;
+    }
+
+    /**
+     * 같은 행정구·같은 유형 시설과의 운영시간 비교(PEER_*)와 경기도 유동인구 통계 비교(FLOW_*) 관찰을
+     * 기존 관찰 뒤에 붙인다(id는 이어서 매긴다). 비교 조회가 실패해도 비교만 빼고 분석을 이어 간다.
+     */
+    private List<Observation> withComparisonObservations(List<Observation> base, List<Candidate> spaces,
+                                                         Map<SpaceType, List<DaySchedule>> weekly, int startMin,
+                                                         int endMin, int dayOfWeek) {
+        try {
+            boolean ownOpen = spaces.stream().anyMatch(c -> "AVAILABLE".equals(c.availability().status()));
+            Integer ownClose = spaces.stream().map(Candidate::currentCloseMin).filter(java.util.Objects::nonNull)
+                    .max(Integer::compare).orElse(null);
+            Facility facility = spaces.get(0).facility();
+            PeerHoursComparison.Result peers = peerComparison.compare(facility, dayOfWeek, startMin, endMin);
+            List<Observation> extra = ImprovementObservations.comparisonObservations(peerComparisonEnabled,
+                    flowStatisticsEnabled, peers, flowPopulation, facility.getDistrict(), ownClose, ownOpen, weekly,
+                    dayOfWeek, startMin, endMin);
+            if (extra.isEmpty()) {
+                return base;
+            }
+            List<Observation> all = new ArrayList<>(base);
+            for (Observation o : extra) {
+                all.add(new Observation("O" + (all.size() + 1), o.type(), o.spaceType(), o.detail()));
+            }
+            return all;
+        } catch (RuntimeException e) {
+            log.warn("A04 비교 관찰(동종 시설·유동인구) 계산에 실패해 비교 없이 분석합니다: {}", e.getClass().getSimpleName());
+            return base;
+        }
     }
 
     private static String rateLimitReason(long retryAfterSeconds) {
