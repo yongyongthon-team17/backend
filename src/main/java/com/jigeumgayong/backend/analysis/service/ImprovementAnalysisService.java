@@ -236,7 +236,8 @@ public class ImprovementAnalysisService {
         String factsJson = ImprovementPrompt.factsJson(facts);
         Set<String> observationIds = observations.stream().map(Observation::id).collect(Collectors.toSet());
         Prepared p = new Prepared(facilityId, spaces, transport, new Context(spaces, observationIds, factsJson),
-                factsJson, ImprovementPrompt.sourceHash(factsJson), ImprovementCache.scopeKey(facilityId),
+                factsJson, ImprovementPrompt.sourceHash(factsJson, llm.modelName(), llm.reasoningEffort()),
+                ImprovementCache.scopeKey(facilityId),
                 ImprovementCache.paramsKey(dayOfWeek, n.startMin(), n.endMin()));
         lookup(p);
         if (p.readFailed) {
@@ -253,7 +254,8 @@ public class ImprovementAnalysisService {
         // 8) 응답 조립: 공간마다 항목 하나, 시설 종합 문장은 항목마다 같다
         p.outcome.warnings().forEach(w -> addWarning(warnings, w));
         // 키·요청/응답 본문·헤더는 남기지 않는다. 시설 식별자와 처리 결과만 기록한다
-        log.info("A04 분석 facilityId={} cache={} llmCalled={}", facilityId, p.outcome.cacheStatus(), p.llmCalled);
+        log.info("A04 분석 facilityId={} cache={} llmCalled={} model={} reasoningEffort={}", facilityId,
+                p.outcome.cacheStatus(), p.llmCalled, llm.modelName(), llm.reasoningEffort());
         List<ImprovementItem> items = spaces.stream().map(c -> toItem(p, c)).toList();
         return new AnalysisResult(new ImprovementAnalysisResponse(n.criteria(), items.size(), 1,
                 found.unknownSpaceCount(), items, ImprovementAnalysisResponse.DISCLAIMER),

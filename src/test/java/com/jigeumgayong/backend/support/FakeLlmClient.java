@@ -20,12 +20,17 @@ public class FakeLlmClient implements LlmClient {
     public volatile Function<String, String> responder = FakeLlmClient::validResponse;
     public volatile long delayMillis = 0;
     public volatile boolean fail = false;
+    /** 환경 변수로 모델·추론 수준을 바꾼 상황을 흉내 낸다 */
+    public volatile String model = "fake-model";
+    public volatile String effort = "low";
 
     public void reset() {
         calls.set(0);
         responder = FakeLlmClient::validResponse;
         delayMillis = 0;
         fail = false;
+        model = "fake-model";
+        effort = "low";
     }
 
     @Override
@@ -47,7 +52,12 @@ public class FakeLlmClient implements LlmClient {
 
     @Override
     public String modelName() {
-        return "fake-model";
+        return model;
+    }
+
+    @Override
+    public String reasoningEffort() {
+        return effort;
     }
 
     /**

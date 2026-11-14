@@ -39,6 +39,11 @@ public class OpenAiLlmClient implements LlmClient {
     }
 
     @Override
+    public String reasoningEffort() {
+        return props.reasoningEffort();
+    }
+
+    @Override
     public String generateJson(String instructions, String input, String schemaName, Map<String, Object> schema) {
         if (!props.hasApiKey()) {
             throw new LlmUnavailableException("OPENAI_API_KEY not set");

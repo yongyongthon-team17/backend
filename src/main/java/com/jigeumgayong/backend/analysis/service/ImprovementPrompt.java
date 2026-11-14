@@ -97,7 +97,15 @@ final class ImprovementPrompt {
         return MAPPER.writeValueAsString(facts);
     }
 
-    /** LLM에 넘긴 입력 근거의 SHA-256(64자 hex). */
+    /**
+     * 캐시용 source_hash. 입력 근거에 생성 설정(모델·추론 수준)을 붙여 해시하므로,
+     * 환경 변수로 모델이나 추론 수준만 바꿔도 다음 요청에서 재생성된다(CACHE_INVALIDATED).
+     */
+    static String sourceHash(String factsJson, String model, String reasoningEffort) {
+        return sourceHash(factsJson + "\n#model=" + model + "\n#reasoningEffort=" + reasoningEffort);
+    }
+
+    /** 문자열의 SHA-256(64자 hex). */
     static String sourceHash(String factsJson) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(factsJson.getBytes(StandardCharsets.UTF_8));
