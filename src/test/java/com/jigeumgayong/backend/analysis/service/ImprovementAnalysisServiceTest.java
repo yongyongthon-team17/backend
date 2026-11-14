@@ -331,6 +331,61 @@ class ImprovementAnalysisServiceTest {
         assertThat(llm.calls.get()).isEqualTo(2);
     }
 
+    @Test
+    void 모델만_바꾸면_HIT이_아니라_같은_행을_재생성하고_새_모델명을_저장한다() {
+        closedEvening(AccessType.OPEN_HOURS);
+        String firstId = run().data().items().get(0).suggestionId();
+
+        llm.model = "other-model";
+        AnalysisResult r = run();
+
+        assertThat(r.data().items().get(0).cache().status()).isEqualTo("CREATED");
+        assertThat(r.data().items().get(0).suggestionId()).isEqualTo(firstId); // 같은 행 UPDATE
+        assertThat(codes(r)).contains("CACHE_INVALIDATED");
+        assertThat(aiRepository.count()).isEqualTo(1);
+        assertThat(aiRepository.findAll().get(0).getModelName()).isEqualTo("other-model");
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v3"); // prompt_version은 그대로
+        assertThat(llm.calls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void 추론_수준만_바꾸면_HIT이_아니라_재생성한다() {
+        closedEvening(AccessType.OPEN_HOURS);
+        run();
+
+        llm.effort = "medium";
+        AnalysisResult r = run();
+
+        assertThat(r.data().items().get(0).cache().status()).isEqualTo("CREATED");
+        assertThat(codes(r)).contains("CACHE_INVALIDATED");
+        assertThat(llm.calls.get()).isEqualTo(2);
+    }
+
+    @Test
+    void 바꿨던_설정을_같은_값으로_유지하면_HIT이다() {
+        closedEvening(AccessType.OPEN_HOURS);
+        llm.model = "other-model";
+        llm.effort = "medium";
+        run();
+
+        ImprovementItem second = run().data().items().get(0);
+
+        assertThat(second.cache().status()).isEqualTo("HIT");
+        assertThat(llm.calls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void 처리_로그에_사용한_모델과_추론_수준이_남는다(CapturedOutput output) {
+        Facility f = closedEvening(AccessType.OPEN_HOURS);
+        llm.model = "other-model";
+        llm.effort = "medium";
+
+        run();
+
+        assertThat(output.getAll()).contains("A04 분석 facilityId=" + f.getFacilityId()
+                + " cache=CREATED llmCalled=true model=other-model reasoningEffort=medium");
+    }
+
     private void setBusStops(Facility f, Integer count) {
         f.updateBusStops(count, java.time.LocalDate.of(2026, 11, 1));
         facilityRepository.save(f);

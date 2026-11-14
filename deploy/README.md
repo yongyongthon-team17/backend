@@ -47,6 +47,22 @@ OPENAI_API_KEY=
 CORS_ALLOWED_ORIGINS=
 ```
 
+AI 개선안(A04) 설정은 선택이다(쓸 줄만 주석을 풀어 env에 넣는다). 넣지 않으면 yaml 값(prod: `gpt-6.1-terra`, `low`, `2000`, `false`)을 쓴다.
+
+```
+# 모델 (gpt-6-luna / gpt-6.1-terra / gpt-6.1-sol)
+# APP_LLM_MODEL=gpt-6.1-sol
+# 추론 수준 (low / medium)
+# APP_LLM_REASONING_EFFORT=low
+# 응답 최대 토큰(추론 토큰 포함). medium이면 4000 권장
+# APP_LLM_MAX_OUTPUT_TOKENS=2000
+# true면 부족한 점이 없는 시설도 AI 일반 보완 제안을 만든다(AI 호출 증가)
+# APP_ANALYSIS_GENERAL_SUGGESTION_ENABLED=false
+```
+
+- 모델이나 추론 수준을 바꾸고 재시작하면 기존 AI 캐시는 다음 요청에서 시설·시간대별로 한 번씩 재생성된다(`CACHE_INVALIDATED`). 그만큼 AI 호출(크레딧)이 늘어난다.
+- 실제 적용 값은 로그 `A04 분석 ... model=... reasoningEffort=...` 줄로 확인한다.
+
 ## 3. DB 준비 (한 번만)
 
 prod는 `ddl-auto: validate` 라서 테이블을 먼저 만들어야 한다.
