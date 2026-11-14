@@ -461,16 +461,31 @@ public class ImprovementAnalysisService {
         return transport.status() == Status.AVAILABLE && pl.suggestionMentionsStopCount() ? "COMPLETE" : "PARTIAL";
     }
 
+    /**
+     * 이름 뒤에 주제 조사(은/는)를 받침에 맞춰 붙인다. 예: 종합자료실 → 종합자료실은, 시설 전체 → 시설 전체는.
+     * 마지막 글자가 한글이 아니면 받침을 알 수 없어 "은(는)"으로 둔다.
+     */
+    static String withTopicParticle(String word) {
+        if (word == null || word.isEmpty()) {
+            return "";
+        }
+        char last = word.charAt(word.length() - 1);
+        if (last < 0xAC00 || last > 0xD7A3) {
+            return word + "은(는)";
+        }
+        return word + ((last - 0xAC00) % 28 == 0 ? "는" : "은");
+    }
+
     /** 서버가 사실(구간 차이, 예약 여부)로 정하는 설명. LLM 문장이 아니다. */
     private static String reasonFor(Candidate c) {
         String range = TimeText.format(c.startMin()) + "–" + TimeText.format(c.endMin());
         String reason;
         if ("UNKNOWN".equals(c.availability().status())) {
-            reason = c.spaceLabel() + "은(는) 해당 요일 운영시간을 확인할 수 없습니다.";
+            reason = withTopicParticle(c.spaceLabel()) + " 해당 요일 운영시간을 확인할 수 없습니다.";
         } else if ("AVAILABLE".equals(c.availability().status())) {
-            reason = c.spaceLabel() + "은(는) 희망 시간(" + range + ")에 이용할 수 있습니다. 운영 현황을 바탕으로 한 보완 제안입니다.";
+            reason = withTopicParticle(c.spaceLabel()) + " 희망 시간(" + range + ")에 이용할 수 있습니다. 운영 현황을 바탕으로 한 보완 제안입니다.";
         } else if (c.currentCloseMin() == null) {
-            reason = c.spaceLabel() + "은(는) 해당 요일 정기 휴관이라 희망 시간(" + range + ")에 이용할 수 없습니다.";
+            reason = withTopicParticle(c.spaceLabel()) + " 해당 요일 정기 휴관이라 희망 시간(" + range + ")에 이용할 수 없습니다.";
         } else if (c.extendable()) {
             reason = c.spaceLabel() + "의 운영 종료(" + TimeText.format(c.currentCloseMin())
                     + ")가 희망 이용 시간(" + range + ")보다 빠릅니다.";
@@ -511,7 +526,8 @@ public class ImprovementAnalysisService {
             Facility facility = spaces.get(0).facility();
             PeerHoursComparison.Result peers = peerComparison.compare(facility, dayOfWeek, startMin, endMin);
             List<Observation> extra = ImprovementObservations.comparisonObservations(peerComparisonEnabled,
-                    flowStatisticsEnabled, peers, flowPopulation, facility.getDistrict(), ownClose, ownOpen, weekly,
+                    flowStatisticsEnabled, peers, flowPopulation, facility.getType().getName(),
+                    facility.getDistrict(), ownClose, ownOpen, weekly,
                     dayOfWeek, startMin, endMin);
             if (extra.isEmpty()) {
                 return base;

@@ -14,6 +14,7 @@ import com.jigeumgayong.backend.transport.dto.TransportAccessibilityResponse.Sta
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 시설의 '부족한 점'을 데이터에서 규칙대로 계산한 사실 목록(관찰). LLM은 이 목록에 있는 것만 근거로 제안한다.
@@ -163,17 +164,24 @@ final class ImprovementObservations {
     static final String COMPARED_CLOSING = "COMPARED_CLOSING";
 
     /**
+     * 유동인구 통계 비교(FLOW_*)를 적용하는 시설 유형. 저녁·주말 연장 제안이 자연스러운 곳만 둔다.
+     * 주민자치센터(행정복지센터)·보건소처럼 행정·진료 업무를 보는 곳에 "22시까지 운영"을 권하지 않기 위해서다.
+     */
+    static final Set<String> FLOW_TARGET_TYPES = Set.of("도서관", "생활체육시설", "문화센터");
+
+    /**
      * 동종 시설 비교(PEER_*)와 유동인구 통계 비교(FLOW_*) 관찰을 모은다. 켜진 쪽만 계산한다.
+     * 유동인구 비교는 {@link #FLOW_TARGET_TYPES} 유형에만 적용한다.
      * 마감 비교가 둘 다 참이면 같은 말을 두 번 하지 않도록 COMPARED_CLOSING 하나로 묶는다(비교 시설 중앙값 + 유동 인구 권장 마감).
      */
     static List<Observation> comparisonObservations(boolean peerEnabled, boolean flowEnabled,
                                                     PeerHoursComparison.Result peers, FloatingPopulation flow,
-                                                    String district, Integer ownCloseMin, boolean ownOpen,
-                                                    Map<SpaceType, List<DaySchedule>> weekly,
+                                                    String typeName, String district, Integer ownCloseMin,
+                                                    boolean ownOpen, Map<SpaceType, List<DaySchedule>> weekly,
                                                     int dayOfWeek, int startMin, int endMin) {
         List<Observation> peerObs = peerEnabled
                 ? peerObservations(peers, ownCloseMin, ownOpen, dayOfWeek, startMin, endMin) : List.of();
-        List<Observation> flowObs = flowEnabled
+        List<Observation> flowObs = flowEnabled && FLOW_TARGET_TYPES.contains(typeName)
                 ? flowObservations(flow, district, ownCloseMin, ownOpen, peers, weekly, dayOfWeek, startMin, endMin)
                 : List.of();
         boolean peerClosing = peerObs.stream().anyMatch(o -> PEER_LATER_CLOSING.equals(o.type()));
