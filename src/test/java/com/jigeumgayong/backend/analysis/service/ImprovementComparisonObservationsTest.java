@@ -99,9 +99,26 @@ class ImprovementComparisonObservationsTest {
     }
 
     @Test
-    void 이미_늦게까지_운영하면_마감_관찰은_없다() {
+    void 이미_늦게까지_운영하면_두_비교를_하나의_충족_관찰로_묶는다() {
         List<Observation> out = compare(true, true, new PeerHoursComparison.Result(6, 6, 6, 22 * 60), 22 * 60, true);
 
-        assertThat(out).isEmpty();
+        assertThat(types(out)).containsExactly(ImprovementObservations.COMPARED_COVERED);
+        assertThat(out.get(0).detail()).contains("경기도 처인구 유동인구 통계").contains("22:00까지 운영해 둘 다 충족함");
+    }
+
+    @Test
+    void 한쪽만_충족하면_묶지_않고_각각_충족_관찰을_낸다() {
+        // 동종 비교는 하지 않는 크기(3곳), 유동인구만 충족
+        List<Observation> out = compare(true, true, new PeerHoursComparison.Result(3, 0, 3, 22 * 60), 22 * 60, true);
+
+        assertThat(types(out)).containsExactly(ImprovementObservations.FLOW_COVERED);
+    }
+
+    @Test
+    void 유동인구_대상이_아닌_유형은_동종_비교_충족만_낸다() {
+        List<Observation> out = compare("주민자치센터", true, true, new PeerHoursComparison.Result(6, 6, 6, 22 * 60),
+                22 * 60, true);
+
+        assertThat(types(out)).containsExactly(ImprovementObservations.PEER_COVERED);
     }
 }

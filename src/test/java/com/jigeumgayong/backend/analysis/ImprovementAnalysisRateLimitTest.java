@@ -42,7 +42,9 @@ import org.springframework.context.annotation.Import;
         "app.llm.rate-limit.enabled=true",
         "app.llm.rate-limit.per-client=2",
         "app.llm.rate-limit.per-ip=100",
-        "app.llm.rate-limit.global=100"
+        "app.llm.rate-limit.global=100",
+        "app.analysis.flow-statistics.enabled=false",
+        "app.analysis.peer-comparison.enabled=false"
 })
 @Import(FakeLlmConfig.class)
 class ImprovementAnalysisRateLimitTest {

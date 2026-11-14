@@ -147,14 +147,16 @@ class ImprovementPeerComparisonTest {
     }
 
     @Test
-    void 이미_비교_시설만큼_늦게_닫으면_마감_비교_관찰이_없다() {
+    void 이미_비교_시설만큼_늦게_닫으면_충족_관찰로_비교_결과를_알려준다() {
         peers(6, library, "수지구", 1320);
         Facility target = facility(library, "수지구", 540, 1320); // 중앙값과 같은 22:00, 희망 시간에 운영 중
 
         List<ImprovementItem> items = run(target);
 
-        assertThat(inputs).isEmpty(); // 부족한 점이 없어 LLM을 부르지 않고 고정 문구
-        assertThat(items.get(0).proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
+        assertThat(inputs).hasSize(1);
+        assertThat(inputs.get(0)).contains("PEER_COVERED").contains("중앙값은 22:00").contains("22:00까지 운영")
+                .doesNotContain("PEER_LATER_CLOSING");
+        assertThat(items.get(0).proposalStatus()).isEqualTo("GENERATED");
     }
 
     @Test
