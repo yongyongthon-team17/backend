@@ -14,4 +14,7 @@ public interface LlmClient {
 
     /** ai_analysis.model_name에 저장할 모델명 */
     String modelName();
+
+    /** 요청에 넣는 추론 수준(reasoning.effort). 모델명과 함께 캐시 source_hash에 들어간다 */
+    String reasoningEffort();
 }
