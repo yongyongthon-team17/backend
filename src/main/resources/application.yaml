@@ -38,6 +38,14 @@ app:
   analysis:
     transport-link:
       enabled: true # false면 A04 transport=NOT_ENABLED, 정류장 수를 LLM에 보내지 않음
+    peer-comparison:
+      # true(기본)면 같은 행정구·같은 유형 시설과 선택 요일 운영시간을 비교해 '부족한 점'으로 AI에 알린다(비교 시설 5곳 이상일 때).
+      # false면 비교하지 않는다. 환경 변수: APP_ANALYSIS_PEER_COMPARISON_ENABLED
+      enabled: true
+    flow-statistics:
+      # true(기본)면 경기도 유동인구 통계(구 단위 시간대·요일 요약, seed/floating_*.csv)를 비교해 '부족한 점'으로 AI에 알린다.
+      # false면 비교하지 않는다. 환경 변수: APP_ANALYSIS_FLOW_STATISTICS_ENABLED
+      enabled: true
     general-suggestion:
       # true면 부족한 점(관찰)이 없는 시설도 AI가 일반적인 보완 제안을 만든다(AI 호출이 늘어남).
       # false(기본)면 "현재 확인된 개선 사항이 없습니다." 고정 문구를 주고 AI를 호출하지 않는다.

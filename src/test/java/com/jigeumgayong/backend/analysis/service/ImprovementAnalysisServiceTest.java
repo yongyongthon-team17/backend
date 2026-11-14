@@ -249,7 +249,7 @@ class ImprovementAnalysisServiceTest {
         AiAnalysis row = aiRepository.findAll().get(0);
 
         assertThat(row.getModelName()).isEqualTo("fake-model");
-        assertThat(row.getPromptVersion()).isEqualTo("imp-v3");
+        assertThat(row.getPromptVersion()).isEqualTo(ImprovementPrompt.PROMPT_VERSION);
         assertThat(row.getSourceHash()).hasSize(64);
         assertThat(row.getScopeKey()).startsWith("FAC:");
         assertThat(row.getParamsKey()).isEqualTo("D:1|T:1140-1260"); // 시설 단위라 공간은 키에 없다
@@ -309,7 +309,7 @@ class ImprovementAnalysisServiceTest {
         ImprovementItem item = run().data().items().get(0);
 
         assertThat(item.cache().status()).isEqualTo("CREATED");
-        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v3");
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo(ImprovementPrompt.PROMPT_VERSION);
         assertThat(llm.calls.get()).isEqualTo(2);
     }
 
@@ -326,7 +326,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(r.data().items().get(0).cache().status()).isEqualTo("CREATED");
         assertThat(r.data().items().get(0).suggestionId()).isEqualTo(firstId);
         assertThat(aiRepository.count()).isEqualTo(1);
-        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v3");
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo(ImprovementPrompt.PROMPT_VERSION);
         assertThat(codes(r)).contains("CACHE_INVALIDATED");
         assertThat(llm.calls.get()).isEqualTo(2);
     }
@@ -344,7 +344,7 @@ class ImprovementAnalysisServiceTest {
         assertThat(codes(r)).contains("CACHE_INVALIDATED");
         assertThat(aiRepository.count()).isEqualTo(1);
         assertThat(aiRepository.findAll().get(0).getModelName()).isEqualTo("other-model");
-        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo("imp-v3"); // prompt_version은 그대로
+        assertThat(aiRepository.findAll().get(0).getPromptVersion()).isEqualTo(ImprovementPrompt.PROMPT_VERSION); // prompt_version은 그대로
         assertThat(llm.calls.get()).isEqualTo(2);
     }
 
