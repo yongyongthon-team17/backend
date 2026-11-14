@@ -71,7 +71,11 @@ class ImprovementFlowStatisticsTest {
     }
 
     private Facility facility(String district) {
-        Facility f = facilityRepository.save(Facility.builder().type(library).sourceType(SourceType.MANUAL)
+        return facility(library, district);
+    }
+
+    private Facility facility(FacilityType type, String district) {
+        Facility f = facilityRepository.save(Facility.builder().type(type).sourceType(SourceType.MANUAL)
                 .sourceKey("k" + (seq++)).district(district).accessType(AccessType.OPEN_HOURS).name("시설" + seq)
                 .address("용인시 " + district).latitude(new BigDecimal("37.3")).longitude(new BigDecimal("127.1"))
                 .build());
@@ -100,6 +104,19 @@ class ImprovementFlowStatisticsTest {
         assertThat(inputs).hasSize(1);
         assertThat(inputs.get(0)).contains("FLOW_CLOSING").contains("경기도 처인구 유동인구 통계")
                 .contains("22:00까지 유동 인구가 많은 시간대").contains("18:00에 마감");
+    }
+
+    @Test
+    void 주민자치센터는_일찍_닫아도_유동인구_관찰을_만들지_않는다() {
+        FacilityType admin = typeRepository.save(FacilityType.builder().name("주민자치센터")
+                .chipGroup(ChipGroup.WELFARE).build());
+        Facility f = facility(admin, "처인구");
+        open(f, TUE, 540, 1080); // 18:00 마감
+
+        ImprovementItem item = run(f, TUE, "10:00", "12:00");
+
+        assertThat(inputs).isEmpty(); // 부족한 점이 없어 LLM을 부르지 않고 고정 문구
+        assertThat(item.proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
     }
 
     @Test

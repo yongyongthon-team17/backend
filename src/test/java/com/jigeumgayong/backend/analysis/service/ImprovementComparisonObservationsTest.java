@@ -23,8 +23,33 @@ class ImprovementComparisonObservationsTest {
 
     private List<Observation> compare(boolean peerEnabled, boolean flowEnabled, PeerHoursComparison.Result peers,
                                       Integer ownClose, boolean ownOpen) {
-        return ImprovementObservations.comparisonObservations(peerEnabled, flowEnabled, peers, flow, "처인구",
+        return compare("도서관", peerEnabled, flowEnabled, peers, ownClose, ownOpen);
+    }
+
+    private List<Observation> compare(String typeName, boolean peerEnabled, boolean flowEnabled,
+                                      PeerHoursComparison.Result peers, Integer ownClose, boolean ownOpen) {
+        return ImprovementObservations.comparisonObservations(peerEnabled, flowEnabled, peers, flow, typeName, "처인구",
                 ownClose, ownOpen, null, TUE, START, END);
+    }
+
+    @Test
+    void 유동인구_비교는_도서관_생활체육시설_문화센터에만_적용한다() {
+        PeerHoursComparison.Result peers = new PeerHoursComparison.Result(3, 0, 3, 22 * 60); // 동종 비교는 하지 않는 크기
+        for (String type : new String[] { "도서관", "생활체육시설", "문화센터" }) {
+            assertThat(types(compare(type, true, true, peers, 18 * 60, true))).as(type)
+                    .containsExactly(ImprovementObservations.FLOW_CLOSING);
+        }
+        for (String type : new String[] { "주민자치센터", "보건소", "평생학습관" }) {
+            assertThat(compare(type, true, true, peers, 18 * 60, true)).as(type).isEmpty();
+        }
+    }
+
+    @Test
+    void 대상이_아닌_유형도_동종_시설_비교는_그대로_한다() {
+        List<Observation> out = compare("주민자치센터", true, true, new PeerHoursComparison.Result(6, 6, 6, 22 * 60),
+                18 * 60, true);
+
+        assertThat(types(out)).containsExactly(ImprovementObservations.PEER_LATER_CLOSING);
     }
 
     @Test
