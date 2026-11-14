@@ -24,7 +24,7 @@ import tools.jackson.databind.json.JsonMapper;
  */
 final class ImprovementPrompt {
 
-    static final String PROMPT_VERSION = "imp-v5";
+    static final String PROMPT_VERSION = "imp-v6";
     static final String SCHEMA_NAME = "improvement_proposal";
     static final JsonMapper MAPPER = JsonMapper.builder().build();
 
@@ -56,6 +56,9 @@ final class ImprovementPrompt {
                 유동 인구는 그 구 전체의 통계이므로 시설의 이용자 수나 수요, 이용 증가를 단정하지 말고, 통계의 연도나 수치는 쓰지 않습니다.
                 COMPARED_CLOSING은 같은 행정구 같은 유형 시설의 마감과 유동인구 통계를 함께 비교한 사실이므로, 두 근거를 한 번에 인용해
                 "비슷한 시설들과 경기도 ○○구 유동인구 통계를 비교했을 때 ~시까지는 운영하는 것이 좋아 보입니다"처럼 제안합니다.
+            14. observations의 PEER_COVERED, FLOW_COVERED, COMPARED_COVERED는 부족한 점이 아니라 비교한 결과 이 시설이 충족한다는 사실입니다.
+                이 관찰이 있으면 integratedSuggestion은 비교 결과로 시작합니다. 예: "경기도 ○○구 유동인구 통계를 비교했을 때 ~시까지 유동 인구가 많은데, 이 시설은 ~시까지 운영해 충분합니다."
+                그 뒤에 현행 운영을 유지한다는 전제로 이용 안내 공개, 운영 현황 점검 같은 보완 방안을 alternatives에 1~2개 제안합니다. 충족한 점을 문제처럼 말하거나 새로운 문제를 만들지 않습니다.
             JSON 외의 텍스트는 출력하지 않습니다.
             """;
 
