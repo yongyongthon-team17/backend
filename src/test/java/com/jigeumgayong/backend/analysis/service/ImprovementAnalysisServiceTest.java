@@ -51,7 +51,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 /** 실제 컨텍스트(H2) + 가짜 LLM. 트랜잭션 밖에서 캐시를 읽고 쓰는 실제 흐름을 검증한다. */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "app.analysis.flow-statistics.enabled=false", "app.analysis.peer-comparison.enabled=false"
+})
 @Import(FakeLlmConfig.class)
 @ExtendWith(OutputCaptureExtension.class)
 class ImprovementAnalysisServiceTest {

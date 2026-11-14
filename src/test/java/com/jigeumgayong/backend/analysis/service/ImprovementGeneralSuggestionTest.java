@@ -35,7 +35,10 @@ import org.springframework.context.annotation.Import;
  * 일반 보완 제안(app.analysis.general-suggestion.enabled=true): 부족한 점이 없는 시설도 AI가 제안을 만든다.
  * 가짜 LLM만 쓰며, 근거 id 검증·캐시·한도 흐름은 기존과 같아야 한다.
  */
-@SpringBootTest(properties = "app.analysis.general-suggestion.enabled=true")
+@SpringBootTest(properties = {
+        "app.analysis.general-suggestion.enabled=true",
+        "app.analysis.flow-statistics.enabled=false", "app.analysis.peer-comparison.enabled=false"
+})
 @Import(FakeLlmConfig.class)
 class ImprovementGeneralSuggestionTest {
 

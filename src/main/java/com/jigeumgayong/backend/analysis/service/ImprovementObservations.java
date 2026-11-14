@@ -72,6 +72,11 @@ final class ImprovementObservations {
             out.add(new Observation("", PEER_LATER_CLOSING, null, "같은 행정구의 같은 유형 시설들은 " + day
                     + " 마감 시각의 중앙값이 " + TimeText.format(median) + "인데 이 시설은 " + TimeText.format(ownCloseMin)
                     + "에 마감해 더 일찍 닫음"));
+        } else if (ownCloseMin != null && median != null && ownCloseMin >= median) {
+            // 부족하지 않아도 비교 결과를 알린다: 이웃 시설과 견줘 같거나 더 늦게까지 운영함
+            out.add(new Observation("", PEER_COVERED, null, "같은 행정구의 같은 유형 시설들의 " + day
+                    + " 마감 시각 중앙값은 " + TimeText.format(median) + "이고 이 시설은 " + TimeText.format(ownCloseMin)
+                    + "까지 운영해 비슷하거나 더 늦게까지 운영함"));
         }
         double ratio = (double) peers.peersOpen() / peers.peerCount();
         if (!ownOpen && ratio >= 0.5) {
@@ -81,6 +86,13 @@ final class ImprovementObservations {
         }
         return out;
     }
+
+    /** 같은 행정구·같은 유형 시설의 마감 중앙값과 견줘 이 시설이 같거나 더 늦게까지 운영함(부족하지 않은 비교 결과) */
+    static final String PEER_COVERED = "PEER_COVERED";
+    /** 유동 인구가 많은 시간대(권장 마감 시각)까지 이 시설이 운영함(부족하지 않은 비교 결과) */
+    static final String FLOW_COVERED = "FLOW_COVERED";
+    /** 동종 시설 비교와 유동인구 비교가 둘 다 충족일 때 하나로 묶은 관찰 */
+    static final String COMPARED_COVERED = "COMPARED_COVERED";
 
     /** 경기도 유동인구 통계에서 유동 인구가 많은 시간대(권장 마감 시각)보다 이 시설이 일찍 닫음 */
     static final String FLOW_CLOSING = "FLOW_CLOSING";
@@ -118,6 +130,11 @@ final class ImprovementObservations {
         if (ownCloseMin != null && suggested != null && suggested - ownCloseMin >= FLOW_CLOSING_GAP_MINUTES) {
             out.add(new Observation("", FLOW_CLOSING, null, source + "를 비교하면 " + TimeText.format(suggested)
                     + "까지 유동 인구가 많은 시간대인데 이 시설은 " + day + " " + TimeText.format(ownCloseMin) + "에 마감함"));
+        } else if (ownCloseMin != null && suggested != null && ownCloseMin >= suggested) {
+            // 부족하지 않아도 비교 결과를 알린다: 유동 인구가 많은 시간대를 충족함
+            out.add(new Observation("", FLOW_COVERED, null, source + "를 비교하면 " + TimeText.format(suggested)
+                    + "까지 유동 인구가 많은 시간대인데 이 시설은 " + day + " " + TimeText.format(ownCloseMin)
+                    + "까지 운영해 그 시간대를 충족함"));
         }
 
         if (!ownOpen && peers != null && peers.peerCount() >= PEER_MIN_COUNT
@@ -184,26 +201,41 @@ final class ImprovementObservations {
         List<Observation> flowObs = flowEnabled && FLOW_TARGET_TYPES.contains(typeName)
                 ? flowObservations(flow, district, ownCloseMin, ownOpen, peers, weekly, dayOfWeek, startMin, endMin)
                 : List.of();
-        boolean peerClosing = peerObs.stream().anyMatch(o -> PEER_LATER_CLOSING.equals(o.type()));
-        boolean flowClosing = flowObs.stream().anyMatch(o -> FLOW_CLOSING.equals(o.type()));
+        boolean mergeClosing = hasType(peerObs, PEER_LATER_CLOSING) && hasType(flowObs, FLOW_CLOSING);
+        boolean mergeCovered = hasType(peerObs, PEER_COVERED) && hasType(flowObs, FLOW_COVERED);
         List<Observation> out = new ArrayList<>();
-        if (peerClosing && flowClosing) {
+        if (mergeClosing) {
             out.add(new Observation("", COMPARED_CLOSING, null, "같은 행정구의 같은 유형 시설들은 " + DAY_LABELS[dayOfWeek]
                     + " 마감 시각의 중앙값이 " + TimeText.format(peers.medianCloseMin()) + "이고 경기도 " + district
                     + " 유동인구 통계에서도 " + TimeText.format(flow.suggestedCloseMin(district))
                     + "까지 유동 인구가 많은 시간대인데 이 시설은 " + TimeText.format(ownCloseMin) + "에 마감함"));
         }
+        if (mergeCovered) {
+            out.add(new Observation("", COMPARED_COVERED, null, "같은 행정구의 같은 유형 시설들의 " + DAY_LABELS[dayOfWeek]
+                    + " 마감 시각 중앙값은 " + TimeText.format(peers.medianCloseMin()) + "이고 경기도 " + district
+                    + " 유동인구 통계에서도 " + TimeText.format(flow.suggestedCloseMin(district))
+                    + "까지 유동 인구가 많은 시간대인데 이 시설은 " + TimeText.format(ownCloseMin)
+                    + "까지 운영해 둘 다 충족함"));
+        }
         for (Observation o : peerObs) {
-            if (!(peerClosing && flowClosing && PEER_LATER_CLOSING.equals(o.type()))) {
+            boolean merged = (mergeClosing && PEER_LATER_CLOSING.equals(o.type()))
+                    || (mergeCovered && PEER_COVERED.equals(o.type()));
+            if (!merged) {
                 out.add(o);
             }
         }
         for (Observation o : flowObs) {
-            if (!(peerClosing && flowClosing && FLOW_CLOSING.equals(o.type()))) {
+            boolean merged = (mergeClosing && FLOW_CLOSING.equals(o.type()))
+                    || (mergeCovered && FLOW_COVERED.equals(o.type()));
+            if (!merged) {
                 out.add(o);
             }
         }
         return out;
+    }
+
+    private static boolean hasType(List<Observation> observations, String type) {
+        return observations.stream().anyMatch(o -> type.equals(o.type()));
     }
 
     /** 요일별 운영 시간 길이가 이 값(분) 이상 차이 나면 DAY_VARIANCE (임의 기준, 해커톤용) */

@@ -132,13 +132,27 @@ class ImprovementFlowStatisticsTest {
     }
 
     @Test
-    void 권장_마감_이후까지_운영하면_마감_관찰이_없다() {
+    void 권장_마감_이후까지_운영하면_충족_관찰로_비교_결과를_알려준다() {
         Facility f = facility("기흥구");
         open(f, TUE, 540, 1320); // 22:00까지
 
+        run(f, TUE, "10:00", "12:00");
+
+        assertThat(inputs).hasSize(1);
+        assertThat(inputs.get(0)).contains("FLOW_COVERED").contains("경기도 기흥구 유동인구 통계")
+                .contains("22:00까지 운영해 그 시간대를 충족함").doesNotContain("FLOW_CLOSING");
+    }
+
+    @Test
+    void 주민자치센터는_충족해도_유동인구_관찰을_만들지_않는다() {
+        FacilityType admin = typeRepository.save(FacilityType.builder().name("주민자치센터")
+                .chipGroup(ChipGroup.WELFARE).build());
+        Facility f = facility(admin, "기흥구");
+        open(f, TUE, 540, 1320);
+
         ImprovementItem item = run(f, TUE, "10:00", "12:00");
 
-        assertThat(inputs).isEmpty(); // 부족한 점이 없어 LLM을 부르지 않는다
+        assertThat(inputs).isEmpty();
         assertThat(item.proposalReason()).isEqualTo("현재 확인된 개선 사항이 없습니다.");
     }
 
@@ -167,7 +181,8 @@ class ImprovementFlowStatisticsTest {
 
         run(target, TUE, "19:00", "21:00");
 
-        assertThat(inputs).isEmpty();
+        assertThat(inputs).hasSize(1);
+        assertThat(inputs.get(0)).doesNotContain("FLOW_SUPPLY_GAP").contains("FLOW_COVERED");
     }
 
     @Test
