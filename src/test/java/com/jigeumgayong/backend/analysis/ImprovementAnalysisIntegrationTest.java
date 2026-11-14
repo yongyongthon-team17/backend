@@ -33,7 +33,8 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
 /** 실제 컨텍스트(H2) + 가짜 LLM + JSON 직렬화 + 공통 에러 핸들러까지 확인한다. */
-@SpringBootTest
+// 유동인구 통계 관찰은 이 테스트가 확인하려는 흐름(관찰이 없을 때의 고정 문구 등)과 무관해 끈다. 켠 동작은 ImprovementFlowStatisticsTest에서 본다.
+@SpringBootTest(properties = "app.analysis.flow-statistics.enabled=false")
 @AutoConfigureMockMvc
 @Import(FakeLlmConfig.class)
 class ImprovementAnalysisIntegrationTest {
