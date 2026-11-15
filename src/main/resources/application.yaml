@@ -70,6 +70,15 @@ app:
       per-client: 10
       per-ip: 150
       global: 150
+  # 실시간 버스 도착(A06). 키는 환경 변수 APP_BUS_API_KEY로만 읽는다(값을 이 파일에 쓰지 않는다).
+  # base-url·arrival-path는 실제 응답 샘플로 확인 전이라 환경 변수로 바꿀 수 있게 둔다.
+  bus:
+    realtime-enabled: ${APP_BUS_REALTIME_ENABLED:false} # false면 외부 호출 없이 status=NOT_ENABLED
+    api-key: ${APP_BUS_API_KEY:}
+    base-url: ${APP_BUS_BASE_URL:https://apis.data.go.kr/6410000}
+    arrival-path: ${APP_BUS_ARRIVAL_PATH:/busarrivalservice/v2/getBusArrivalListv2}
+    timeout: 3s
+    cache-ttl: 30s
   # CORS 허용 출처(쉼표 구분). 비어 있으면 교차 출처를 허용하지 않는다. local 기본값은 application-local.yaml
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:}

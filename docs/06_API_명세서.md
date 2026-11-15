@@ -15,6 +15,7 @@ v0.3 · v0.2 원본에 B03 정정(한석영, 2026-11-08 노션 「B03 api 명세
 | 시설 상세 및 공간별 운영시간 | A03 | GET | /api/v1/facilities/{facilityId} | 시설 상세 | P0 핵심 | 구현 |
 | 공간별 불일치 분석 및 AI 개선안 | A04 | POST | /api/v1/improvement-analyses | AI 분석 | P0 핵심 | 구현 |
 | 시설 교통 접근성 조회 | A05 | GET | /api/v1/facilities/{facilityId}/transport-accessibility | 교통 접근성 | P1 조건부 | 구현 |
+| 시설 주변 실시간 버스 도착 | A06 | GET | /api/v1/facilities/{facilityId}/bus-arrivals | 교통 접근성 | 추가(스위치) | 구현(외부 응답 형식 미검증) |
 
 ## 공통 문서
 
@@ -699,6 +700,88 @@ Accept: application/json
 | 503 | DATA_UNAVAILABLE | 시설 DB 조회 실패 |
 
 v0.2의 503 FEATURE_NOT_ENABLED는 현재 구현에 on/off가 없어 쓰지 않는다.
+
+---
+
+## A06. 시설 주변 실시간 버스 도착
+
+- `GET /api/v1/facilities/{facilityId}/bus-arrivals`
+- Path facilityId: string 필수(A03·A05와 같은 형식 규칙). Query / Body 없음.
+- 시설 좌표 기준 반경 500m 안 정류장을 가까운 순으로 최대 3곳 고르고, 정류장마다 도착 예정 노선을 남은 시간순으로 최대 5개 준다. [구현]
+- 정류장 목록은 `seed/bus_stops.csv`(A05 집계와 같은 원천)에서 고른다. 이름에 "(미정차)"가 붙은 정류장은 제외한다. 정류소 조회 API는 호출하지 않는다. [구현]
+- 도착 정보만 경기도 버스도착정보 API로 조회한다. 정류장 ID는 CSV의 `GGB228001782`에서 `GGB`를 뗀 값을 stationId로 쓴다. **[미검증]** 실제 응답 샘플로 확인 전이다.
+- 외부 API가 실패하거나 스위치가 꺼져 있어도 HTTP는 200이고, `status`로 구분한다(500을 주지 않음).
+- 외부 호출은 정류장별로 병렬이며 호출당 3초 제한이다. 결과는 시설 기준 30초 동안 메모리에 캐시한다. AVAILABLE 결과만 캐시한다.
+- 스위치: `APP_BUS_REALTIME_ENABLED`(기본 false). 키: `APP_BUS_API_KEY`(환경 변수로만 받음).
+
+```
+GET /api/v1/facilities/101/bus-arrivals
+Accept: application/json
+```
+
+#### 응답 data 필드
+
+| 필드 | 타입 | 필수 | null | 설명 |
+|---|---|---|---|---|
+| facilityId | string | 예 | 아니오 | 대상 시설 |
+| status | string(enum) | 예 | 아니오 | AVAILABLE / UNAVAILABLE / NOT_ENABLED |
+| radiusMeters | integer | 예 | 아니오 | 500 |
+| stops | BusStop[] | 예 | 아니오 | 가까운 순으로 최대 3곳. UNAVAILABLE·NOT_ENABLED이면 빈 배열 |
+| stops[].stopId | string | 예 | 아니오 | 정류장번호(CSV stop_id) |
+| stops[].name | string | 예 | 아니오 | 정류장명 |
+| stops[].distanceMeters | integer | 예 | 아니오 | 시설에서의 직선거리(m, 반올림) |
+| stops[].arrivals | BusArrival[] | 예 | 아니오 | 남은 시간순으로 최대 5개. 이 정류장 조회만 실패했으면 빈 배열 |
+| arrivals[].routeName | string | 예 | 아니오 | 노선번호 |
+| arrivals[].minutesLeft | integer | 예 | 예 | 도착까지 남은 분. null은 정보 없음(목록 뒤로 정렬) |
+| arrivals[].stopsLeft | integer | 예 | 예 | 남은 정류장 수. null은 정보 없음 |
+
+#### status 규칙
+
+| status | 조건 |
+|---|---|
+| AVAILABLE | 조회 성공. 반경 안 정류장이 0곳이면 외부 호출 없이 `stops: []`. 일부 정류장만 실패하면 AVAILABLE을 유지하고 실패한 정류장의 `arrivals`만 비움 |
+| UNAVAILABLE | 모든 정류장 호출 실패(오류·타임아웃·응답 해석 실패) 또는 키 미설정. `stops: []` |
+| NOT_ENABLED | 스위치 꺼짐. 외부 호출 없음. `stops: []` |
+
+```json
+{
+  "data": {
+    "facilityId": "101",
+    "status": "AVAILABLE",
+    "radiusMeters": 500,
+    "stops": [
+      {
+        "stopId": "GGB228001782", "name": "정류장명", "distanceMeters": 42,
+        "arrivals": [
+          { "routeName": "10", "minutesLeft": 2, "stopsLeft": 1 },
+          { "routeName": "1112", "minutesLeft": 4, "stopsLeft": 2 },
+          { "routeName": "5005", "minutesLeft": 7, "stopsLeft": 4 }
+        ]
+      },
+      { "stopId": "GGB228001783", "name": "정류장명", "distanceMeters": 77, "arrivals": [] }
+    ]
+  },
+  "meta": { "requestId": "req-demo-001", "generatedAt": "2026-11-15T14:00:00+09:00", "warnings": [] }
+}
+```
+
+```json
+{
+  "data": { "facilityId": "101", "status": "NOT_ENABLED", "radiusMeters": 500, "stops": [] },
+  "meta": { "requestId": "req-demo-001", "generatedAt": "2026-11-15T14:00:00+09:00", "warnings": [] }
+}
+```
+
+#### 상태코드
+
+| HTTP | code | 처리 |
+|---|---|---|
+| 200 | - | AVAILABLE / UNAVAILABLE / NOT_ENABLED |
+| 400 | INVALID_REQUEST | facilityId 형식 오류 |
+| 404 | FACILITY_NOT_FOUND | 시설 없음(스위치와 무관) |
+
+- 외부 API 응답 필드(경로 `response.msgBody.busArrivalList`, `routeName`, `predictTime1`, `locationNo1`, `resultCode`)는 가정값이다. 코드에서는 `ArrivalResponseParser` 한 곳에서만 읽으며, 실제 샘플을 받으면 이 클래스만 고친다. [미검증]
+- CORS: 기존 `/api/**` GET 허용 설정으로 충분하다. 추가 설정은 없다.
 
 ---
 
