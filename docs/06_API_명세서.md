@@ -15,7 +15,7 @@ v0.3 · v0.2 원본에 B03 정정(한석영, 2026-11-08 노션 「B03 api 명세
 | 시설 상세 및 공간별 운영시간 | A03 | GET | /api/v1/facilities/{facilityId} | 시설 상세 | P0 핵심 | 구현 |
 | 공간별 불일치 분석 및 AI 개선안 | A04 | POST | /api/v1/improvement-analyses | AI 분석 | P0 핵심 | 구현 |
 | 시설 교통 접근성 조회 | A05 | GET | /api/v1/facilities/{facilityId}/transport-accessibility | 교통 접근성 | P1 조건부 | 구현 |
-| 시설 주변 실시간 버스 도착 | A06 | GET | /api/v1/facilities/{facilityId}/bus-arrivals | 교통 접근성 | 추가(스위치) | 구현(외부 응답 형식 미검증) |
+| 시설 주변 실시간 버스 도착 | A06 | GET | /api/v1/facilities/{facilityId}/bus-arrivals | 교통 접근성 | 추가(스위치) | 구현(응답 형식 검증 완료) |
 
 ## 공통 문서
 
@@ -709,7 +709,7 @@ v0.2의 503 FEATURE_NOT_ENABLED는 현재 구현에 on/off가 없어 쓰지 않�
 - Path facilityId: string 필수(A03·A05와 같은 형식 규칙). Query / Body 없음.
 - 시설 좌표 기준 반경 500m 안 정류장을 가까운 순으로 최대 3곳 고르고, 정류장마다 도착 예정 노선을 남은 시간순으로 최대 5개 준다. [구현]
 - 정류장 목록은 `seed/bus_stops.csv`(A05 집계와 같은 원천)에서 고른다. 이름에 "(미정차)"가 붙은 정류장은 제외한다. 정류소 조회 API는 호출하지 않는다. [구현]
-- 도착 정보만 경기도 버스도착정보 API로 조회한다. 정류장 ID는 CSV의 `GGB228001782`에서 `GGB`를 뗀 값을 stationId로 쓴다. **[미검증]** 실제 응답 샘플로 확인 전이다.
+- 도착 정보만 경기도 버스도착정보 API로 조회한다. 정류장 ID는 CSV의 `GGB228001782`에서 `GGB`를 뗀 값을 stationId로 쓴다. [검증] 2026-11-15 실제 호출(stationId=228001782)로 확인했다: `GGB`를 뗀 값이 응답의 `stationId`와 같다.
 - 외부 API가 실패하거나 스위치가 꺼져 있어도 HTTP는 200이고, `status`로 구분한다(500을 주지 않음).
 - 외부 호출은 정류장별로 병렬이며 호출당 3초 제한이다. 결과는 시설 기준 30초 동안 메모리에 캐시한다. AVAILABLE 결과만 캐시한다.
 - 스위치: `APP_BUS_REALTIME_ENABLED`(기본 false). 키: `APP_BUS_API_KEY`(환경 변수로만 받음).
@@ -780,7 +780,7 @@ Accept: application/json
 | 400 | INVALID_REQUEST | facilityId 형식 오류 |
 | 404 | FACILITY_NOT_FOUND | 시설 없음(스위치와 무관) |
 
-- 외부 API 응답 필드(경로 `response.msgBody.busArrivalList`, `routeName`, `predictTime1`, `locationNo1`, `resultCode`)는 가정값이다. 코드에서는 `ArrivalResponseParser` 한 곳에서만 읽으며, 실제 샘플을 받으면 이 클래스만 고친다. [미검증]
+- 외부 API 응답 필드(경로 `response.msgBody.busArrivalList`, `routeName`, `predictTime1`, `locationNo1`, `resultCode` 0/4)는 2026-11-15 실제 응답 샘플로 확인했다. [검증] 노선이 하나뿐이면 배열이 아닌 객체로 오는 경우와 도착 예정이 없을 때의 응답은 샘플로 확인하지 못했다. 코드에서는 `ArrivalResponseParser` 한 곳에서만 읽는다. `routeDestName`(종점)·`stationNm1` 등 다른 필드는 사용하지 않는다.
 - CORS: 기존 `/api/**` GET 허용 설정으로 충분하다. 추가 설정은 없다.
 
 ---
